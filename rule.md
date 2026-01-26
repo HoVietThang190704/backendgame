@@ -13,11 +13,14 @@
 ## Build & Chạy (Maven) ⚙️
 - Build toàn bộ: `mvn clean install`
 - Build module cụ thể: `mvn -pl web -am clean package`
-- Chạy ứng dụng web: `cd web && mvn spring-boot:run && java -jar web\target\web-1.0.0.jar`
+- Chạy ứng dụng web: `cd web && mvn spring-boot:run` (hoặc `java -jar web\target\web-1.0.0.jar`)
+- **Chú ý:** trước khi chạy `mvn clean` hoặc `mvn package`, hãy dừng mọi instance đang chạy (ví dụ `java -jar web\target\web-1.0.0.jar` hoặc `mvn spring-boot:run`) để tránh file bị khóa trên Windows.
 - Bỏ qua tests khi cần: `mvn -DskipTests clean package`
-mvn -DskipTests clean package
+
+```powershell
 $env:SPRING_PROFILES_ACTIVE='dev'
 java -jar web\target\web-1.0.0.jar
+```
 
 ## Cấu hình môi trường (ENV) 🌐
 - File mẫu `.env.example` đã được thêm vào root repo; **KHÔNG** chép mật khẩu thật vào repository.

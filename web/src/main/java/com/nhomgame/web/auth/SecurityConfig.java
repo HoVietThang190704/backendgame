@@ -30,16 +30,23 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter, com.nhomgame.web.config.OpenApiProperties openApiProperties) throws Exception {
         http
             .cors(cors -> cors.disable())
             .csrf(csrf -> csrf.disable())
             .exceptionHandling(ex -> ex.authenticationEntryPoint(authEntryPointJwt))
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .anyRequest().authenticated()
-            );
+            .authorizeHttpRequests(auth -> {
+                if (openApiProperties.isEnabled()) {
+                    // Allow all access to OpenAPI endpoints (all methods) so Swagger UI can fetch the spec
+                    auth.requestMatchers("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs/swagger-config").permitAll();
+                    auth.requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/swagger-ui/index.html").permitAll();
+                    auth.requestMatchers("/api/auth/**").permitAll();
+                } else {
+                    auth.requestMatchers("/api/auth/**").permitAll();
+                }
+                auth.anyRequest().authenticated();
+            });
 
         http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();

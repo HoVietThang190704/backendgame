@@ -1,12 +1,20 @@
 spring:
-  config:
-    import: optional:dotenv:.env
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/backendgame}
+      uri: ${MONGODB_URI}
 
 # JWT settings
 jwt:
   secret: ${JWT_SECRET:change-me-in-prod}
   accessExpirationMs: ${JWT_ACCESS_EXP_MS:900000} # 15 minutes
   refreshExpirationDays: ${JWT_REFRESH_DAYS:7} # 7 days
+
+# OpenAPI settings (configurable via environment variables)
+api:
+  openapi:
+    enabled: ${API_OPENAPI_ENABLED:true}
+    title: ${API_TITLE:Backend Game API}
+    description: ${API_DESCRIPTION:API for Backend Game}
+    version: ${API_VERSION:1.0.0}
+
+# Note: removed fallback URL now that springdoc is upgraded (uses /v3/api-docs by default) 

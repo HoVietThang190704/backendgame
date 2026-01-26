@@ -1,0 +1,12 @@
+spring:
+  config:
+    import: optional:dotenv:.env
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/backendgame}
+
+# JWT settings
+jwt:
+  secret: ${JWT_SECRET:change-me-in-prod}
+  accessExpirationMs: ${JWT_ACCESS_EXP_MS:900000} # 15 minutes
+  refreshExpirationDays: ${JWT_REFRESH_DAYS:7} # 7 days

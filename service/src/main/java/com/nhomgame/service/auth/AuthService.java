@@ -1,0 +1,104 @@
+package com.nhomgame.service.auth;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
+import java.util.Set;
+
+import org.springframework.stereotype.Service;
+
+import com.nhomgame.domain.auth.RefreshToken;
+import com.nhomgame.domain.auth.Role;
+import com.nhomgame.domain.auth.User;
+import com.nhomgame.domain.auth.dto.LoginRequest;
+import com.nhomgame.domain.auth.dto.SignupRequest;
+import com.nhomgame.infrastructure.auth.RefreshTokenRepository;
+import com.nhomgame.infrastructure.auth.UserRepository;
+
+@Service
+public class AuthService {
+
+    private final UserRepository userRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
+    private final JwtService jwtService;
+    private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
+
+    public AuthService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       JwtService jwtService,
+                       org.springframework.security.crypto.password.PasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.jwtService = jwtService;
+        this.passwordEncoder = passwordEncoder;
+    }
+
+    public User register(SignupRequest req) {
+        if (userRepository.existsByUsername(req.getUsername())) {
+            throw new IllegalArgumentException("Username already exists");
+        }
+        if (userRepository.existsByEmail(req.getEmail())) {
+            throw new IllegalArgumentException("Email already exists");
+        }
+
+        Set<Role> roles = new HashSet<>();
+        if (req.getRoles() != null) {
+            for (String r : req.getRoles()) {
+                try {
+                    roles.add(Role.valueOf(r));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        if (roles.isEmpty()) roles.add(Role.ROLE_USER);
+
+        User user = new User(req.getUsername(), req.getEmail(), passwordEncoder.encode(req.getPassword()), roles);
+        return userRepository.save(user);
+    }
+
+    public String authenticate(LoginRequest req) {
+        User user = userRepository.findByUsername(req.getUsername())
+                .orElseThrow(() -> new IllegalArgumentException("Invalid username or password"));
+        if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+            throw new IllegalArgumentException("Invalid username or password");
+        }
+
+        user.setLastLogin(Instant.now());
+        userRepository.save(user);
+
+        return jwtService.generateAccessToken(user);
+    }
+
+    // helper methods used by web layer
+    public User findByUsername(String username) {
+        return userRepository.findByUsername(username).orElse(null);
+    }
+
+    public User findById(String id) {
+        return userRepository.findById(id).orElse(null);
+    }
+
+    public boolean checkPassword(String raw, String encoded) {
+        return passwordEncoder.matches(raw, encoded);
+    }
+
+    public RefreshToken createRefreshToken(String userId, long daysValid) {
+        String token = jwtService.generateRefreshToken();
+        RefreshToken rt = new RefreshToken(userId, token, Instant.now().plus(daysValid, ChronoUnit.DAYS));
+        return refreshTokenRepository.save(rt);
+    }
+
+    public RefreshToken verifyRefreshToken(String token) {
+        RefreshToken rt = refreshTokenRepository.findByToken(token)
+                .orElseThrow(() -> new IllegalArgumentException("Refresh token not found"));
+        if (rt.getExpiryDate().isBefore(Instant.now())) {
+            refreshTokenRepository.delete(rt);
+            throw new IllegalArgumentException("Refresh token expired");
+        }
+        return rt;
+    }
+
+    public void deleteRefreshTokensForUser(String userId) {
+        refreshTokenRepository.deleteByUserId(userId);
+    }
+}

@@ -1,0 +1,34 @@
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.nhomgame</groupId>
+        <artifactId>backendgame</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    
+    <artifactId>service</artifactId>
+
+    <dependencies>
+        <!-- Access domain models and infrastructure repositories -->
+        <dependency>
+            <groupId>com.nhomgame</groupId>
+            <artifactId>domain</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nhomgame</groupId>
+            <artifactId>infrastructure</artifactId>
+        </dependency>
+
+        <!-- Security & JWT handling -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.auth0</groupId>
+            <artifactId>java-jwt</artifactId>
+            <version>4.4.0</version>
+        </dependency>
+
+    </dependencies>
+</project>

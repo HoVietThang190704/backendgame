@@ -1,0 +1,20 @@
+1) Register — Đăng ký user
+-   Method: POST
+-   URL: POST {{base_url}}/api/auth/register
+-   Body (JSON):
+    {
+        "username": "alice",
+        "email": "alice@example.com",
+        "password": "secret123",
+        "roles": ["ROLE_USER"]    
+    }
+-   Response 200 OK:
+    {
+        "id": "607d1f...",
+        "username": "alice",
+        "email": "alice@example.com",
+        "roles": ["ROLE_USER"],
+        "createdAt": "2026-01-25T12:30:10Z",
+        "lastLogin": null
+    }
+-   400 Bad Request — validation lỗi (thiếu field, email invalid, username exists, ...)

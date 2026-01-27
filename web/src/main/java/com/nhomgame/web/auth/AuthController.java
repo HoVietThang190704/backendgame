@@ -45,7 +45,9 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<JwtResponse> login(@Valid @RequestBody LoginRequest req) {
         // authenticate + generate tokens
-        User user = authService.findByUsername(req.getUsername());
+        String username = req.getUsername();
+        if (username == null) return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
+        User user = authService.findByUsername(username);
         if (user == null || !authService.checkPassword(req.getPassword(), user.getPassword())) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
         }
@@ -60,8 +62,10 @@ public class AuthController {
         try {
             RefreshToken old = authService.verifyRefreshToken(req.getRefreshToken());
             // rotate: delete old and create new
-            authService.deleteRefreshTokensForUser(old.getUserId());
-            User user = authService.findById(old.getUserId());
+            String userId = old.getUserId();
+            if (userId == null) return ResponseEntity.badRequest().body("Invalid refresh token");
+            authService.deleteRefreshTokensForUser(userId);
+            User user = authService.findById(userId);
             if (user == null) return ResponseEntity.badRequest().body("User not found");
             String newAccess = jwtService.generateAccessToken(user);
             RefreshToken newRefresh = authService.createRefreshToken(user.getId(), refreshExpirationDays);
@@ -75,7 +79,9 @@ public class AuthController {
     public ResponseEntity<?> logout(@Valid @RequestBody TokenRefreshRequest req) {
         try {
             RefreshToken rt = authService.verifyRefreshToken(req.getRefreshToken());
-            authService.deleteRefreshTokensForUser(rt.getUserId());
+            String userId = rt.getUserId();
+            if (userId == null) return ResponseEntity.badRequest().body("Invalid refresh token");
+            authService.deleteRefreshTokensForUser(userId);
             return ResponseEntity.ok().build();
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());

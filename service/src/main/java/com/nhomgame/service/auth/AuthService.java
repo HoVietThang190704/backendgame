@@ -9,6 +9,7 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 
 import com.nhomgame.domain.auth.RefreshToken;
@@ -69,8 +70,13 @@ public class AuthService {
     @CacheEvict(value = "users", key = "#req.username")
     public String authenticate(LoginRequest req) {
         long start = System.nanoTime();
+        String username = null;
         try {
-            User user = findByUsername(req.getUsername());
+            username = req.getUsername();
+            if (username == null) {
+                throw new IllegalArgumentException("Invalid username or password");
+            }
+            User user = findByUsername(username);
             if (user == null) {
                 throw new IllegalArgumentException("Invalid username or password");
             }
@@ -84,18 +90,18 @@ public class AuthService {
             return jwtService.generateAccessToken(user);
         } finally {
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            log.debug("authenticate(username={}) took {} ms", req.getUsername(), elapsedMs);
+            log.debug("authenticate(username={}) took {} ms", username, elapsedMs);
         }
     }
 
     // helper methods used by web layer
     @Cacheable(value = "users", key = "#username")
-    public User findByUsername(String username) {
+    public User findByUsername(@NonNull String username) {
         return userRepository.findByUsername(username).orElse(null);
     }
 
     @Cacheable(value = "users", key = "#id")
-    public User findById(String id) {
+    public User findById(@NonNull String id) {
         return userRepository.findById(id).orElse(null);
     }
 

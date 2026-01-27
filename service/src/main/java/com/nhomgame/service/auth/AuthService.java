@@ -5,6 +5,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 
 import com.nhomgame.domain.auth.RefreshToken;
@@ -23,6 +27,8 @@ public class AuthService {
     private final JwtService jwtService;
     private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
+
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
                        JwtService jwtService,
@@ -33,6 +39,10 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    @Caching(put = {
+            @CachePut(value = "users", key = "#result.id"),
+            @CachePut(value = "users", key = "#result.username")
+    })
     public User register(SignupRequest req) {
         if (userRepository.existsByUsername(req.getUsername())) {
             throw new IllegalArgumentException("Username already exists");
@@ -56,24 +66,35 @@ public class AuthService {
         return userRepository.save(user);
     }
 
+    @CacheEvict(value = "users", key = "#req.username")
     public String authenticate(LoginRequest req) {
-        User user = userRepository.findByUsername(req.getUsername())
-                .orElseThrow(() -> new IllegalArgumentException("Invalid username or password"));
-        if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
-            throw new IllegalArgumentException("Invalid username or password");
+        long start = System.nanoTime();
+        try {
+            User user = findByUsername(req.getUsername());
+            if (user == null) {
+                throw new IllegalArgumentException("Invalid username or password");
+            }
+            if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+                throw new IllegalArgumentException("Invalid username or password");
+            }
+
+            user.setLastLogin(Instant.now());
+            userRepository.save(user);
+
+            return jwtService.generateAccessToken(user);
+        } finally {
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            log.debug("authenticate(username={}) took {} ms", req.getUsername(), elapsedMs);
         }
-
-        user.setLastLogin(Instant.now());
-        userRepository.save(user);
-
-        return jwtService.generateAccessToken(user);
     }
 
     // helper methods used by web layer
+    @Cacheable(value = "users", key = "#username")
     public User findByUsername(String username) {
         return userRepository.findByUsername(username).orElse(null);
     }
 
+    @Cacheable(value = "users", key = "#id")
     public User findById(String id) {
         return userRepository.findById(id).orElse(null);
     }

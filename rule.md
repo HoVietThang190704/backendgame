@@ -37,6 +37,22 @@ java -jar web\target\web-1.0.0.jar
 - `domain` sử dụng `jakarta.persistence` (JPA API)
 - Dự án dùng `lombok` (module `domain`) → **Bật Annotation Processing** trong IDE (IntelliJ / Eclipse) để tránh lỗi biên dịch.
 
+### Caching (Caffeine) ⚡️
+- Cách dùng: project đã tích hợp **Caffeine** cho môi trường dev (in-memory, không cần infra). Mục đích: giảm truy vấn đọc users và tăng tốc các thao tác đọc lặp.
+- Những thay đổi đã áp dụng:
+  - `web/pom.xml`: thêm `spring-boot-starter-cache` và `com.github.ben-manes.caffeine:caffeine:3.1.8`
+  - `service/pom.xml`: thêm `spring-boot-starter-cache`
+  - `WebApplication` đã bật `@EnableCaching`
+  - Cấu hình: `com.nhomgame.web.config.CaffeineCacheConfig` (cache tên: `users`, TTL 10 phút, max 1000)
+- Cách sử dụng trong code:
+  - `@Cacheable(value = "users", key = "#username")` cho `findByUsername`
+  - `@Cacheable(value = "users", key = "#id")` cho `findById`
+  - `@CachePut` / `@CacheEvict` dùng trong `register` / `authenticate` để đồng bộ cache khi cập nhật user
+- Lưu ý vận hành:
+  - Cache giúp giảm tải đọc nhưng phải invalidate khi dữ liệu thay đổi (sử dụng `@CacheEvict`/`@CachePut` phù hợp).
+  - Đối với mật khẩu: nếu thấy đăng nhập chậm ở trường hợp sai mật khẩu, nguyên nhân thường do BCrypt cost; **chỉ** giảm cost cho profile **dev** (ví dụ `new BCryptPasswordEncoder(8)`) để tăng tốc local tests—không làm vậy ở production.
+- Kiểm thử: thêm unit/integration test để verify cache hit/evict (ví dụ với `@SpringBootTest` hoặc Mockito + `CacheManager`).
+
 ## Style & Chất lượng mã ✨
 - Hiện tại không có config Checkstyle/Spotless trong repo. Áp dụng quy ước sau:
   - Theo **Spring/Google Java Style** (tên biến rõ ràng, camelCase, phương thức ngắn, single responsibility)

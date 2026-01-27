@@ -3,12 +3,14 @@ package com.nhomgame.web;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 
 import com.nhomgame.web.config.JwtProperties;
 import com.nhomgame.web.config.OpenApiProperties;
 
 @SpringBootApplication(scanBasePackages = "com.nhomgame")
+@EnableCaching
 @EnableConfigurationProperties({JwtProperties.class, OpenApiProperties.class})
 @EnableMongoRepositories(basePackages = "com.nhomgame.infrastructure")
 public class WebApplication {

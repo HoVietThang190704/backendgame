@@ -16,6 +16,7 @@ import com.nhomgame.domain.auth.dto.SignupRequest;
 import com.nhomgame.domain.auth.dto.TokenRefreshRequest;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.auth.JwtService;
+import com.nhomgame.web.dto.ApiResponse;
 
 import jakarta.validation.Valid;
 
@@ -37,54 +38,64 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@Valid @RequestBody SignupRequest req) {
+    public ResponseEntity<ApiResponse<com.nhomgame.domain.auth.dto.UserResponse>> register(@Valid @RequestBody SignupRequest req) {
         User user = authService.register(req);
-        return ResponseEntity.ok(new com.nhomgame.domain.auth.dto.UserResponse(user));
+        com.nhomgame.domain.auth.dto.UserResponse resp = new com.nhomgame.domain.auth.dto.UserResponse(user);
+        return ResponseEntity.status(201).body(new ApiResponse<>(201, true, "User registered successfully", resp));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<JwtResponse> login(@Valid @RequestBody LoginRequest req) {
-        // authenticate + generate tokens
-        String username = req.getUsername();
-        if (username == null) return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
-        User user = authService.findByUsername(username);
+    public ResponseEntity<ApiResponse<JwtResponse>> login(@Valid @RequestBody LoginRequest req) {
+        String email = req.getEmail();
+        if (email == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).body(new ApiResponse<>(401, false, "Invalid email or password", null));
+        }
+        User user = authService.findByEmail(email);
         if (user == null || !authService.checkPassword(req.getPassword(), user.getPassword())) {
-            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).body(new ApiResponse<>(401, false, "Invalid email or password", null));
         }
         String accessToken = jwtService.generateAccessToken(user);
         RefreshToken rt = authService.createRefreshToken(user.getId(), refreshExpirationDays);
-        JwtResponse resp = new JwtResponse(accessToken, rt.getToken());
-        return ResponseEntity.ok(resp);
+        JwtResponse jwtResp = new JwtResponse(accessToken, rt.getToken());
+        return ResponseEntity.ok(new ApiResponse<>(200, true, "Login successful", jwtResp));
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<?> refresh(@Valid @RequestBody TokenRefreshRequest req) {
+    public ResponseEntity<ApiResponse<JwtResponse>> refresh(@Valid @RequestBody TokenRefreshRequest req) {
         try {
             RefreshToken old = authService.verifyRefreshToken(req.getRefreshToken());
             // rotate: delete old and create new
             String userId = old.getUserId();
-            if (userId == null) return ResponseEntity.badRequest().body("Invalid refresh token");
+            if (userId == null) {
+                return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, "Invalid refresh token", null));
+            }
             authService.deleteRefreshTokensForUser(userId);
             User user = authService.findById(userId);
-            if (user == null) return ResponseEntity.badRequest().body("User not found");
+            if (user == null) {
+                return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, "User not found", null));
+            }
             String newAccess = jwtService.generateAccessToken(user);
             RefreshToken newRefresh = authService.createRefreshToken(user.getId(), refreshExpirationDays);
-            return ResponseEntity.ok(new JwtResponse(newAccess, newRefresh.getToken()));
+            JwtResponse jwtResp = new JwtResponse(newAccess, newRefresh.getToken());
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Token refreshed", jwtResp));
         } catch (IllegalArgumentException ex) {
-            return ResponseEntity.badRequest().body(ex.getMessage());
+            return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, ex.getMessage(), null));
         }
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<?> logout(@Valid @RequestBody TokenRefreshRequest req) {
+    public ResponseEntity<ApiResponse<Void>> logout(@Valid @RequestBody TokenRefreshRequest req) {
         try {
             RefreshToken rt = authService.verifyRefreshToken(req.getRefreshToken());
             String userId = rt.getUserId();
-            if (userId == null) return ResponseEntity.badRequest().body("Invalid refresh token");
+            if (userId == null) {
+                return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, "Invalid refresh token", null));
+            }
             authService.deleteRefreshTokensForUser(userId);
-            return ResponseEntity.ok().build();
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Logout successful", null));
         } catch (IllegalArgumentException ex) {
-            return ResponseEntity.badRequest().body(ex.getMessage());
+            return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, ex.getMessage(), null));
         }
     }
 }
+

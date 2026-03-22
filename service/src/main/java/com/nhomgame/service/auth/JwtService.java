@@ -1,14 +1,15 @@
 package com.nhomgame.service.auth;
 
+import java.util.Date;
+import java.util.UUID;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.nhomgame.domain.auth.User;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
-import java.util.Date;
-import java.util.UUID;
 
 @Service
 public class JwtService {
@@ -27,9 +28,13 @@ public class JwtService {
         Date expiresAt = new Date(now.getTime() + accessTokenValidityMs);
 
         return JWT.create()
-                .withSubject(user.getUsername())
+                .withSubject(user.getEmail())
                 .withIssuedAt(now)
                 .withExpiresAt(expiresAt)
+                .withClaim("userId", user.getId())
+                .withClaim("email", user.getEmail())
+                .withClaim("rule", user.getRule())
+                .withClaim("role", user.getRule())
                 .withClaim("roles", user.getRoles().stream().map(Enum::name).toList())
                 .sign(algorithm);
     }

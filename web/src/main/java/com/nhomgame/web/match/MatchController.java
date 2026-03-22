@@ -10,9 +10,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
-import com.nhomgame.domain.auth.User;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.match.MatchService;
 import com.nhomgame.web.dto.ApiResponse;

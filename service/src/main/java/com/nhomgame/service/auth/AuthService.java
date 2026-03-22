@@ -61,36 +61,45 @@ public class AuthService {
                 }
             }
         }
-        if (roles.isEmpty()) roles.add(Role.ROLE_USER);
+        if (roles.isEmpty()) roles.add(Role.user);
 
         User user = new User(req.getUsername(), req.getEmail(), passwordEncoder.encode(req.getPassword()), roles);
+        user.setName(req.getName() != null ? req.getName() : req.getUsername());
+        user.setAvatarUrl(req.getAvatarUrl() != null ? req.getAvatarUrl() : "");
+        user.setActive(req.getIsActive() == null ? true : req.getIsActive());
+        user.setRule(roles.stream().findFirst().map(Role::name).orElse("user"));
+        user.setCurrentMatchId(null);
+        user.setModifiedAt(Instant.now());
+
         return userRepository.save(user);
     }
 
-    @CacheEvict(value = "users", key = "#req.username")
+    @CacheEvict(value = "users", key = "#req.email")
     public String authenticate(LoginRequest req) {
         long start = System.nanoTime();
-        String username = null;
+        String email = null;
         try {
-            username = req.getUsername();
-            if (username == null) {
-                throw new IllegalArgumentException("Invalid username or password");
+            email = req.getEmail();
+            if (email == null) {
+                throw new IllegalArgumentException("Invalid email or password");
             }
-            User user = findByUsername(username);
+            User user = findByEmail(email);
             if (user == null) {
-                throw new IllegalArgumentException("Invalid username or password");
+                throw new IllegalArgumentException("Invalid email or password");
             }
             if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
-                throw new IllegalArgumentException("Invalid username or password");
+                throw new IllegalArgumentException("Invalid email or password");
             }
 
-            user.setLastLogin(Instant.now());
+            Instant now = Instant.now();
+            user.setLastLogin(now);
+            user.setModifiedAt(now);
             userRepository.save(user);
 
             return jwtService.generateAccessToken(user);
         } finally {
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            log.debug("authenticate(username={}) took {} ms", username, elapsedMs);
+            log.debug("authenticate(email={}) took {} ms", email, elapsedMs);
         }
     }
 
@@ -98,6 +107,11 @@ public class AuthService {
     @Cacheable(value = "users", key = "#username")
     public User findByUsername(@NonNull String username) {
         return userRepository.findByUsername(username).orElse(null);
+    }
+
+    @Cacheable(value = "users", key = "#email")
+    public User findByEmail(@NonNull String email) {
+        return userRepository.findByEmail(email).orElse(null);
     }
 
     @Cacheable(value = "users", key = "#id")

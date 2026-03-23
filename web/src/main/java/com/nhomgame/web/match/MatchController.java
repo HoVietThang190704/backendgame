@@ -159,6 +159,43 @@ public class MatchController {
     }
 
     /**
+     * DELETE /api/match/cancel
+     *
+     * Cancel a previously started match finding operation (waiting queue entry)
+     */
+    @org.springframework.web.bind.annotation.DeleteMapping("/api/match/cancel")
+    public ResponseEntity<ApiResponse<Void>> cancelMatch(Principal principal) {
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        String userId = user.getId();
+        log.info("Cancel match find request from user {} ({})", userId, email);
+
+        try {
+            matchService.cancelWaitingQueue(userId);
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Search cancelled", null));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid cancel request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in cancelMatch", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
+    }
+
+    /**
      * Response DTO for waiting queue entry
      */
     public static class WaitingQueueResponse {

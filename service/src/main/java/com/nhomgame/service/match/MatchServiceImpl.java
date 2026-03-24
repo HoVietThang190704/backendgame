@@ -256,15 +256,61 @@ public class MatchServiceImpl implements MatchService {
     }
 
     @Override
-    public void markPlayerDisconnected(String matchId, String userId) {
+    public Match leaveMatch(String matchId, String userId) {
         Match match = getMatchById(matchId);
-        if (match == null) return;
-
-        match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
-        if (match.getPlayers().isEmpty()) {
-            match.setStatus("cancelled");
+        if (match == null) {
+            throw new IllegalArgumentException("Match not found");
         }
-        matchRepository.save(match);
+
+        boolean removed = match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
+        if (!removed) {
+            throw new IllegalArgumentException("User is not in match");
+        }
+
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null) {
+            user.setCurrentMatchId(null);
+            user.setModifiedAt(Instant.now());
+            userRepository.save(user);
+        }
+
+        if (match.getPlayers().isEmpty()) {
+            matchRepository.deleteById(matchId);
+            return null;
+        }
+
+        // if host leaves, transfer ownership
+        if (userId.equals(match.getHostId())) {
+            String newHost = match.getPlayers().get(0).getUserId();
+            match.setHostId(newHost);
+
+            // if currentPlayer left, set to new host.
+            if (userId.equals(match.getCurrentPlayerId())) {
+                match.setCurrentPlayerId(newHost);
+                match.setCurrentTurn(0);
+                match.setTurnStartTime(Instant.now());
+            }
+        }
+
+        if (userId.equals(match.getCurrentPlayerId())) {
+            String nextPlayer = match.getPlayers().get(0).getUserId();
+            match.setCurrentPlayerId(nextPlayer);
+            match.setCurrentTurn(0);
+            match.setTurnStartTime(Instant.now());
+        }
+
+        match.setUpdatedAt(Instant.now());
+        return matchRepository.save(match);
+    }
+
+    @Override
+    public void markPlayerDisconnected(String matchId, String userId) {
+        try {
+            leaveMatch(matchId, userId);
+        } catch (IllegalArgumentException ex) {
+            // ignore if not part of match
+            log.debug("markPlayerDisconnected: {}", ex.getMessage());
+        }
     }
 
     /**

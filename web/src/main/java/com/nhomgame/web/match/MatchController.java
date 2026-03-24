@@ -16,6 +16,7 @@ import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.WsEvent;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.match.MatchService;
 import com.nhomgame.web.dto.ApiResponse;
@@ -32,12 +33,14 @@ public class MatchController {
 
     private final MatchService matchService;
     private final AuthService authService;
+    private final org.springframework.messaging.simp.SimpMessagingTemplate template;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchController.class);
 
-    public MatchController(MatchService matchService, AuthService authService) {
+    public MatchController(MatchService matchService, AuthService authService, org.springframework.messaging.simp.SimpMessagingTemplate template) {
         this.matchService = matchService;
         this.authService = authService;
+        this.template = template;
     }
 
     /**
@@ -240,6 +243,47 @@ public class MatchController {
 
         } catch (Exception ex) {
             log.error("Unexpected error in getMatchState", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
+    }
+
+    /**
+     * DELETE /api/matches/{id}/leave
+     *
+     * Remove user from match and reset currentMatchId; handle host transfer/room cleanup.
+     */
+    @org.springframework.web.bind.annotation.DeleteMapping("/api/matches/{id}/leave")
+    public ResponseEntity<ApiResponse<Void>> leaveMatch(
+            @org.springframework.web.bind.annotation.PathVariable("id") String matchId,
+            Principal principal) {
+
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        try {
+            com.nhomgame.domain.match.Match updatedMatch = matchService.leaveMatch(matchId, user.getId());
+            template.convertAndSend("/topic/match." + matchId, new WsEvent<>("player_left", user.getId()));
+            if (updatedMatch == null) {
+                template.convertAndSend("/topic/match." + matchId, new WsEvent<>("match_closed", matchId));
+            }
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Left match successfully", null));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid leave request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in leaveMatch", ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
         }

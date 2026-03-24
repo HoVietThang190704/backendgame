@@ -76,6 +76,11 @@ public interface MatchService {
     void switchTurn(String matchId);
 
     /**
+     * Player leaves match (from waiting room or dashboard)
+     */
+    Match leaveMatch(String matchId, String userId);
+
+    /**
      * Mark player as disconnected
      */
     void markPlayerDisconnected(String matchId, String userId);

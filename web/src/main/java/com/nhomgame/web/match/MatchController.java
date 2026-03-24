@@ -18,6 +18,7 @@ import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.match.MatchService;
+import com.nhomgame.service.match.MatchmakingService;
 import com.nhomgame.web.dto.ApiResponse;
 
 import jakarta.validation.Valid;
@@ -32,12 +33,14 @@ public class MatchController {
 
     private final MatchService matchService;
     private final AuthService authService;
+    private final MatchmakingService matchmakingService;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchController.class);
 
-    public MatchController(MatchService matchService, AuthService authService) {
+    public MatchController(MatchService matchService, AuthService authService, MatchmakingService matchmakingService) {
         this.matchService = matchService;
         this.authService = authService;
+        this.matchmakingService = matchmakingService;
     }
 
     /**
@@ -159,7 +162,72 @@ public class MatchController {
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
     }
+POST /api/match/join
+     *
+     * Join the matchmaking queue for finding an opponent
+     *
+     * Request body: { "userId": "string" }
+     *
+     * Response: ApiResponse with Match object if opponent found, or message if waiting
+     */
+    @PostMapping("/api/match/join")
+    public ResponseEntity<ApiResponse<?>> joinQueue(@Valid @RequestBody JoinQueueRequest request) {
 
+        if (request == null || request.getUserId() == null || request.getUserId().isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, "UserId is required", null));
+        }
+
+        String userId = request.getUserId();
+        log.info("Join queue request from user {}", userId);
+
+        try {
+            // Call matchmaking service to join queue
+            Match match = matchmakingService.joinQueue(userId);
+
+            if (match == null) {
+                // No opponent found, user added to waiting queue
+                return ResponseEntity.ok(new ApiResponse<>(200, true, "Waiting for opponent", null));
+            } else {
+                // Opponent found, match created
+                return ResponseEntity.ok(new ApiResponse<>(200, true, "Match found", match));
+            }
+
+        } catch (IllegalStateException ex) {
+            log.warn("User already in active match: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in joinQueue", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }quest DTO for joining the matchmaking queue
+     */
+    public static class JoinQueueRequest {
+        private String userId;
+
+        public JoinQueueRequest() {
+        }
+
+        public JoinQueueRequest(String userId) {
+            this.userId = userId;
+        }
+
+        public String getUserId() {
+            return userId;
+        }
+
+        public void setUserId(String userId) {
+            this.userId = userId;
+        }
+    }
+
+    /**
+     * Re
+    }
+
+    /**
+     * 
     /**
      * GET /api/matches/{id}
      *

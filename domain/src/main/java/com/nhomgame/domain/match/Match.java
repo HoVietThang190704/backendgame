@@ -1,17 +1,27 @@
 package com.nhomgame.domain.match;
 
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
+import org.springframework.data.mongodb.core.mapping.FieldType;
 
-/**
- * Match domain document - represents a game match/room.
- */
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 @Document(collection = "matches")
 public class Match {
+
     @Id
     private String id;
     private String matchType; // "private", "public", "ranked"
@@ -31,58 +41,40 @@ public class Match {
     private String winnerId; // ID of winning player
     private Instant updatedAt = Instant.now();
 
-    public Match() {
-    }
+    private String matchType;
+    private String status;
+    private String pinCode;
+
+    @Field(targetType = FieldType.OBJECT_ID)
+    private String hostId;
+
+    private List<Player> players = new ArrayList<>();
+
+    private Map<String, GameBoard> gameBoard = new HashMap<>();
+
+    private Integer currentTurn = 0;
+
+    @Field(targetType = FieldType.OBJECT_ID)
+    private String currentPlayerId;
+
+    @Field(targetType = FieldType.OBJECT_ID)
+    private String winnerId;
+
+    private Integer turnTimeLimit;
+
+    private Instant createdAt;
+    private Instant updatedAt;
 
     public Match(String matchType, String hostId, String pinCode) {
         this.matchType = matchType;
         this.hostId = hostId;
         this.pinCode = pinCode;
         this.status = "waiting";
+        this.turnTimeLimit = 30;
         this.currentTurn = 0;
+        this.players = new ArrayList<>();
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
-    }
-
-    // Getters and Setters
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getMatchType() {
-        return matchType;
-    }
-
-    public void setMatchType(String matchType) {
-        this.matchType = matchType;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public String getPinCode() {
-        return pinCode;
-    }
-
-    public void setPinCode(String pinCode) {
-        this.pinCode = pinCode;
-    }
-
-    public String getHostId() {
-        return hostId;
-    }
-
-    public void setHostId(String hostId) {
-        this.hostId = hostId;
     }
 
     public List<Player> getPlayers() {
@@ -185,132 +177,30 @@ public class Match {
      * Nested class for Player in the match
      */
     public static class Player {
+        @Field(targetType = FieldType.OBJECT_ID)
         private String userId;
         private String username;
-        private int score = 0;
-        private int health = 3;
-        private boolean isReady = false;
-        private boolean isAlive = true;
-        private Instant joinedAt;
-
-        public Player() {
-        }
+        private boolean ready;
+        private int health;
 
         public Player(String userId, String username) {
             this.userId = userId;
             this.username = username;
-            this.joinedAt = Instant.now();
-        }
-
-        // Getters and Setters
-        public String getUserId() {
-            return userId;
-        }
-
-        public void setUserId(String userId) {
-            this.userId = userId;
-        }
-
-        public String getUsername() {
-            return username;
-        }
-
-        public void setUsername(String username) {
-            this.username = username;
-        }
-
-        public int getScore() {
-            return score;
-        }
-
-        public void setScore(int score) {
-            this.score = score;
-        }
-
-        public int getHealth() {
-            return health;
-        }
-
-        public void setHealth(int health) {
-            this.health = health;
-        }
-
-        public boolean isReady() {
-            return isReady;
-        }
-
-        public void setReady(boolean ready) {
-            isReady = ready;
-        }
-
-        public boolean isAlive() {
-            return isAlive;
-        }
-
-        public void setAlive(boolean alive) {
-            isAlive = alive;
-        }
-
-        public Instant getJoinedAt() {
-            return joinedAt;
-        }
-
-        public void setJoinedAt(Instant joinedAt) {
-            this.joinedAt = joinedAt;
         }
     }
 
-    /**
-     * Nested class for GameBoard configuration
-     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class GameBoard {
-        private int width;
-        private int height;
-        private int mineCount;
-        private String difficulty; // "easy", "medium", "hard"
-
-        public GameBoard() {
-        }
-
-        public GameBoard(int width, int height, int mineCount, String difficulty) {
-            this.width = width;
-            this.height = height;
-            this.mineCount = mineCount;
-            this.difficulty = difficulty;
-        }
-
-        // Getters and Setters
-        public int getWidth() {
-            return width;
-        }
-
-        public void setWidth(int width) {
-            this.width = width;
-        }
-
-        public int getHeight() {
-            return height;
-        }
-
-        public void setHeight(int height) {
-            this.height = height;
-        }
-
-        public int getMineCount() {
-            return mineCount;
-        }
-
-        public void setMineCount(int mineCount) {
-            this.mineCount = mineCount;
-        }
-
-        public String getDifficulty() {
-            return difficulty;
-        }
-
-        public void setDifficulty(String difficulty) {
-            this.difficulty = difficulty;
-        }
+        private Integer width;
+        private Integer height;
+        private Integer mineCount;
+        private String difficulty;
+        private Integer hearts = 3;
+        private List<String> bombs = new ArrayList<>();
+        private List<String> flags = new ArrayList<>();
+        private List<String> revealed = new ArrayList<>();
     }
 
     public static class Move {

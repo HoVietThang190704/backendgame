@@ -186,6 +186,7 @@ public class MatchServiceImpl implements MatchService {
         if (match == null) return null;
         match.setStatus("playing");
         match.setCurrentTurn(0);
+        match.setTurnStartTime(Instant.now());
         if (!match.getPlayers().isEmpty()) {
             String firstPlayerId = match.getPlayers().get(0).getUserId();
             match.setCurrentPlayerId(firstPlayerId);
@@ -208,6 +209,10 @@ public class MatchServiceImpl implements MatchService {
         if ("bomb".equals(result)) {
             player.setHealth(Math.max(0, player.getHealth() - 1));
         }
+
+        // Append move history for game state reconstruction
+        Match.Move recordedMove = new Match.Move(userId, x, y, action);
+        match.getMoves().add(recordedMove);
 
         matchRepository.save(match);
 
@@ -246,6 +251,7 @@ public class MatchServiceImpl implements MatchService {
         String nextPlayerId = match.getPlayers().get(nextTurnIdx).getUserId();
         match.setCurrentTurn(nextTurnIdx);
         match.setCurrentPlayerId(nextPlayerId);
+        match.setTurnStartTime(Instant.now());
         matchRepository.save(match);
     }
 

@@ -26,4 +26,10 @@ public interface WaitingQueueRepository extends MongoRepository<WaitingQueue, St
      * Check if user is in waiting queue
      */
     boolean existsByUserIdAndStatus(String userId, String status);
+
+    /**
+     * Find first waiting queue entry where userId is not the given userId,
+     * ordered by joinedAt in ascending order
+     */
+    Optional<WaitingQueue> findFirstByUserIdIsNotOrderByJoinedAtAsc(String userId);
 }

@@ -267,6 +267,58 @@ public class MatchServiceImpl implements MatchService {
         matchRepository.save(match);
     }
 
+    @Override
+    public Match joinMatchWithPin(String userId, String username, String pinCode) {
+        // 1. Tìm trận đấu có pinCode tương ứng và status là "waiting"
+        // (Lưu ý: Bạn cần đảm bảo MatchRepository đã có hàm findByPinCodeAndStatus này nhé)
+        Match match = matchRepository.findByPinCode(pinCode)
+                .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy phòng chờ với mã PIN này."));
+
+        // 2. Kiểm tra số lượng người chơi hiện tại, nếu đã đủ 2 người thì báo lỗi "Room Full"
+        if (match.getPlayers() != null && match.getPlayers().size() >= 2) {
+            throw new IllegalArgumentException("Room Full");
+        }
+
+        // Kiểm tra xem user có lỡ tự join lại phòng của chính mình không
+        boolean alreadyInRoom = match.getPlayers().stream()
+                .anyMatch(p -> p.getUserId().equals(userId));
+        if (alreadyInRoom) {
+            throw new IllegalArgumentException("Bạn đã ở trong phòng này rồi.");
+        }
+
+        // 3. Thêm người chơi mới vào mảng players với playerNumber: 2 và isReady: false
+        Match.Player player2 = new Match.Player();
+        player2.setUserId(userId);
+        player2.setUsername(username);
+        // Dựa vào các trường trong class Match.Player của bạn để set (vd: playerNumber, isReady, health...)
+        // player2.setPlayerNumber(2); 
+        // player2.setReady(false);
+        // player2.setHealth(100);
+
+        match.getPlayers().add(player2);
+
+        // Lưu bản ghi Match đã cập nhật vào DB
+        Match savedMatch = matchRepository.save(match);
+
+        // 4. Cập nhật currentMatchId cho người chơi vừa tham gia
+        // (Giả sử bạn có tiêm userRepository hoặc có authService để thao tác với User)
+        /*
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null) {
+            user.setCurrentMatchId(savedMatch.getId());
+            userRepository.save(user);
+        }
+        */
+
+        // 5. Yêu cầu Real-time: Bắn thông báo qua socket.io tới chủ phòng
+        // Mình thấy bên trái bạn có file MatchSocketEventListener.java
+        // Bạn có thể inject SocketService vào class này để gọi, ví dụ:
+        // String hostId = match.getHostId();
+        // socketService.sendToUser(hostId, "player_joined", savedMatch);
+
+        return savedMatch;
+    }
+
     /**
      * Generate a unique 4-digit PIN code (0000-9999)
      */
@@ -287,4 +339,5 @@ public class MatchServiceImpl implements MatchService {
 
         return pinCode;
     }
+
 }

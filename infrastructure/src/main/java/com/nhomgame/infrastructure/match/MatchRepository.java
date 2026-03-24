@@ -32,4 +32,5 @@ public interface MatchRepository extends MongoRepository<Match, String> {
      * Find active matches by host ID
      */
     Optional<Match> findByHostIdAndStatusIn(String hostId, List<String> statuses);
+    
 }

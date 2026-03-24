@@ -65,6 +65,8 @@ public interface MatchService {
      */
     Match startMatch(String matchId);
 
+    Match joinMatchWithPin(String userId, String username, String pinCode);
+    
     /**
      * Apply a move
      */

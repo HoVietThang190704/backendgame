@@ -23,6 +23,8 @@ public class Match {
     private int turnTimeLimit; // in seconds
     private int currentTurn; // 0-based index of current player
     private String currentPlayerId; // ID of player whose turn it is
+    private Instant turnStartTime; // when current turn started
+    private java.util.List<Move> moves = new java.util.ArrayList<>();
     private Instant createdAt = Instant.now();
     private Instant startedAt;
     private Instant finishedAt;
@@ -121,6 +123,22 @@ public class Match {
 
     public void setCurrentPlayerId(String currentPlayerId) {
         this.currentPlayerId = currentPlayerId;
+    }
+
+    public Instant getTurnStartTime() {
+        return turnStartTime;
+    }
+
+    public void setTurnStartTime(Instant turnStartTime) {
+        this.turnStartTime = turnStartTime;
+    }
+
+    public java.util.List<Move> getMoves() {
+        return moves;
+    }
+
+    public void setMoves(java.util.List<Move> moves) {
+        this.moves = moves;
     }
 
     public Instant getCreatedAt() {
@@ -294,4 +312,64 @@ public class Match {
             this.difficulty = difficulty;
         }
     }
+
+    public static class Move {
+        private String playerId;
+        private int x;
+        private int y;
+        private String action; // open or flag
+        private Instant createdAt = Instant.now();
+
+        public Move() {
+        }
+
+        public Move(String playerId, int x, int y, String action) {
+            this.playerId = playerId;
+            this.x = x;
+            this.y = y;
+            this.action = action;
+            this.createdAt = Instant.now();
+        }
+
+        public String getPlayerId() {
+            return playerId;
+        }
+
+        public void setPlayerId(String playerId) {
+            this.playerId = playerId;
+        }
+
+        public int getX() {
+            return x;
+        }
+
+        public void setX(int x) {
+            this.x = x;
+        }
+
+        public int getY() {
+            return y;
+        }
+
+        public void setY(int y) {
+            this.y = y;
+        }
+
+        public String getAction() {
+            return action;
+        }
+
+        public void setAction(String action) {
+            this.action = action;
+        }
+
+        public Instant getCreatedAt() {
+            return createdAt;
+        }
+
+        public void setCreatedAt(Instant createdAt) {
+            this.createdAt = createdAt;
+        }
+    }
 }
+

@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -97,6 +98,35 @@ public class UserController {
 
         log.debug("Filtered fields returned: {}", filtered.keySet());
         return ResponseEntity.ok(new ApiResponse<>(200, true, "User profile fetched", filtered));
+    }
+
+    /**
+     * GET /api/user/public/{id}
+     *
+     * Public endpoint for retrieving basic info of a user by ID (opponent data)
+     * Security: no sensitive info returned
+     */
+    @GetMapping("/public/{id}")
+    public ResponseEntity<ApiResponse<Object>> publicProfile(@PathVariable("id") String id) {
+        if (id == null || id.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(HttpStatus.BAD_REQUEST.value(), false, "User id is required", null));
+        }
+
+        User user = authService.findById(id);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(HttpStatus.NOT_FOUND.value(), false, "User not found", null));
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        String displayName = user.getName() != null && !user.getName().isBlank() ? user.getName() : user.getUsername();
+        data.put("displayName", displayName);
+        data.put("avatar", user.getAvatarUrl() != null ? user.getAvatarUrl() : "");
+        data.put("rank", user.getRank());
+        data.put("winRate", user.getWinRate());
+
+        return ResponseEntity.ok(new ApiResponse<>(200, true, "Public user profile fetched", data));
     }
 
     /**

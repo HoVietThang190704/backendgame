@@ -35,7 +35,10 @@ public class MatchWebSocketController {
     @MessageMapping("/join_room")
     @Transactional
     public void joinRoom(@Payload JoinRoomPayload payload, Principal principal) {
-        String userId = principal.getName();
+        String userId = resolveUserId(principal);
+        if (userId == null) {
+            return;
+        }
         String matchId = payload.getMatchId();
         if (matchId == null || matchId.isBlank()) return;
 
@@ -77,7 +80,10 @@ public class MatchWebSocketController {
 
     @MessageMapping("/toggle_ready")
     public void toggleReady(@Payload ToggleReadyPayload payload, Principal principal) {
-        String userId = principal.getName();
+        String userId = resolveUserId(principal);
+        if (userId == null) {
+            return;
+        }
         String matchId = payload.getMatchId();
         if (matchId == null || matchId.isBlank()) return;
 
@@ -92,7 +98,10 @@ public class MatchWebSocketController {
 
     @MessageMapping("/send_move")
     public void sendMove(@Payload SendMovePayload payload, Principal principal) {
-        String userId = principal.getName();
+        String userId = resolveUserId(principal);
+        if (userId == null) {
+            return;
+        }
         String matchId = payload.getMatchId();
         if (matchId == null || matchId.isBlank()) return;
 
@@ -110,5 +119,13 @@ public class MatchWebSocketController {
             return;
         }
         matchService.switchTurn(matchId);
+    }
+
+    private String resolveUserId(Principal principal) {
+        if (principal == null || principal.getName() == null || principal.getName().isBlank()) {
+            return null;
+        }
+        var user = authService.findByEmail(principal.getName());
+        return user != null ? user.getId() : null;
     }
 }

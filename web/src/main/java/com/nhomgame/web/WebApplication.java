@@ -7,12 +7,14 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import com.nhomgame.web.config.JwtProperties;
 import com.nhomgame.web.config.OpenApiProperties;
 
 @SpringBootApplication(scanBasePackages = "com.nhomgame")
 @EnableCaching
+@EnableScheduling
 @EnableConfigurationProperties({JwtProperties.class, OpenApiProperties.class})
 @EnableMongoRepositories(basePackages = "com.nhomgame.infrastructure")
 public class WebApplication {

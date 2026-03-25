@@ -4,6 +4,7 @@ import java.security.Principal;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.Match;
+import com.nhomgame.domain.match.dto.WsEvent;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.match.MatchService;
 import com.nhomgame.web.dto.ApiResponse;
@@ -23,12 +25,14 @@ public class MatchJoinController {
 
     private final MatchService matchService;
     private final AuthService authService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchJoinController.class);
 
-    public MatchJoinController(MatchService matchService, AuthService authService) {
+    public MatchJoinController(MatchService matchService, AuthService authService, SimpMessagingTemplate messagingTemplate) {
         this.matchService = matchService;
         this.authService = authService;
+        this.messagingTemplate = messagingTemplate;
     }
 
     @PostMapping("/api/matches/join")
@@ -55,6 +59,15 @@ public class MatchJoinController {
         try {
             Match match = matchService.joinMatchWithPin(userId, user.getName(), request.getPinCode());
 
+            // Gửi socket notification tới host (chủ phòng)
+            messagingTemplate.convertAndSend("/topic/match." + match.getId(),
+                    new WsEvent<>("player_joined", new Object() {
+                        public final String playerId = userId;
+                        public final String playerName = user.getName();
+                        public final int totalPlayers = match.getPlayers().size();
+                    }));
+
+            log.info("User {} joined match {} successfully", userId, match.getId());
             return ResponseEntity.ok(new ApiResponse<>(200, true, "Tham gia phòng thành công", match.getId()));
 
         } catch (IllegalArgumentException ex) {

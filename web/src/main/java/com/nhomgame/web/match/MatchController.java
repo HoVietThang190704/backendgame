@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -162,7 +163,9 @@ public class MatchController {
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
     }
-POST /api/match/join
+
+    /**
+     * POST /api/match/join
      *
      * Join the matchmaking queue for finding an opponent
      *
@@ -201,7 +204,11 @@ POST /api/match/join
             log.error("Unexpected error in joinQueue", ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
-        }quest DTO for joining the matchmaking queue
+        }
+    }
+
+    /**
+     * Request DTO for joining the matchmaking queue
      */
     public static class JoinQueueRequest {
         private String userId;
@@ -222,12 +229,6 @@ POST /api/match/join
         }
     }
 
-    /**
-     * Re
-    }
-
-    /**
-     * 
     /**
      * GET /api/matches/{id}
      *
@@ -275,7 +276,9 @@ POST /api/match/join
 
             if (match.getMoves() != null) {
                 for (Match.Move move : match.getMoves()) {
-                    if (move == null || move.getAction() == null) continue;
+                    if (move == null || move.getAction() == null) {
+                        continue;
+                    }
                     String action = move.getAction();
                     Coordinate coord = new Coordinate(move.getX(), move.getY());
 
@@ -318,7 +321,7 @@ POST /api/match/join
      *
      * Cancel a previously started match finding operation (waiting queue entry)
      */
-    @org.springframework.web.bind.annotation.DeleteMapping("/api/match/cancel")
+    @DeleteMapping("/api/match/cancel")
     public ResponseEntity<ApiResponse<Void>> cancelMatch(Principal principal) {
         if (principal == null || principal.getName() == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -461,10 +464,16 @@ POST /api/match/join
             this.status = match.getStatus();
             this.hostId = match.getHostId();
             this.playerCount = match.getPlayers() != null ? match.getPlayers().size() : 0;
-            if (match.getGameBoard() != null) {
-                this.boardWidth = match.getGameBoard().getWidth();
-                this.boardHeight = match.getGameBoard().getHeight();
-                this.mineCount = match.getGameBoard().getMineCount();
+            if (match.getGameBoard() != null && !match.getGameBoard().isEmpty()) {
+                Match.GameBoard board = match.getGameBoard().get(match.getHostId());
+                if (board == null) {
+                    board = match.getGameBoard().values().iterator().next();
+                }
+                if (board != null) {
+                    this.boardWidth = board.getWidth();
+                    this.boardHeight = board.getHeight();
+                    this.mineCount = board.getMineCount();
+                }
             }
             this.turnTimeLimit = match.getTurnTimeLimit();
             this.createdAt = match.getCreatedAt();

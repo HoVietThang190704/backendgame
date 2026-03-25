@@ -24,23 +24,6 @@ public class Match {
 
     @Id
     private String id;
-    private String matchType; // "private", "public", "ranked"
-    private String status; // "waiting", "playing", "finished", "cancelled"
-    private String pinCode; // 4-digit code for private rooms
-    private String hostId; // User ID of the room creator
-    private List<Player> players = new ArrayList<>();
-    private GameBoard gameBoard;
-    private int turnTimeLimit; // in seconds
-    private int currentTurn; // 0-based index of current player
-    private String currentPlayerId; // ID of player whose turn it is
-    private Instant turnStartTime; // when current turn started
-    private java.util.List<Move> moves = new java.util.ArrayList<>();
-    private Instant createdAt = Instant.now();
-    private Instant startedAt;
-    private Instant finishedAt;
-    private String winnerId; // ID of winning player
-    private Instant updatedAt = Instant.now();
-
     private String matchType;
     private String status;
     private String pinCode;
@@ -51,6 +34,11 @@ public class Match {
     private List<Player> players = new ArrayList<>();
 
     private Map<String, GameBoard> gameBoard = new HashMap<>();
+
+    private Instant turnStartTime;
+    private List<Move> moves = new ArrayList<>();
+    private Instant startedAt;
+    private Instant finishedAt;
 
     private Integer currentTurn = 0;
 
@@ -77,105 +65,11 @@ public class Match {
         this.updatedAt = Instant.now();
     }
 
-    public List<Player> getPlayers() {
-        return players;
-    }
-
-    public void setPlayers(List<Player> players) {
-        this.players = players;
-    }
-
-    public GameBoard getGameBoard() {
-        return gameBoard;
-    }
-
-    public void setGameBoard(GameBoard gameBoard) {
-        this.gameBoard = gameBoard;
-    }
-
-    public int getTurnTimeLimit() {
-        return turnTimeLimit;
-    }
-
-    public void setTurnTimeLimit(int turnTimeLimit) {
-        this.turnTimeLimit = turnTimeLimit;
-    }
-
-    public int getCurrentTurn() {
-        return currentTurn;
-    }
-
-    public void setCurrentTurn(int currentTurn) {
-        this.currentTurn = currentTurn;
-    }
-
-    public String getCurrentPlayerId() {
-        return currentPlayerId;
-    }
-
-    public void setCurrentPlayerId(String currentPlayerId) {
-        this.currentPlayerId = currentPlayerId;
-    }
-
-    public Instant getTurnStartTime() {
-        return turnStartTime;
-    }
-
-    public void setTurnStartTime(Instant turnStartTime) {
-        this.turnStartTime = turnStartTime;
-    }
-
-    public java.util.List<Move> getMoves() {
-        return moves;
-    }
-
-    public void setMoves(java.util.List<Move> moves) {
-        this.moves = moves;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Instant getStartedAt() {
-        return startedAt;
-    }
-
-    public void setStartedAt(Instant startedAt) {
-        this.startedAt = startedAt;
-    }
-
-    public Instant getFinishedAt() {
-        return finishedAt;
-    }
-
-    public void setFinishedAt(Instant finishedAt) {
-        this.finishedAt = finishedAt;
-    }
-
-    public String getWinnerId() {
-        return winnerId;
-    }
-
-    public void setWinnerId(String winnerId) {
-        this.winnerId = winnerId;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
-    }
-
     /**
      * Nested class for Player in the match
      */
+    @Data
+    @NoArgsConstructor
     public static class Player {
         @Field(targetType = FieldType.OBJECT_ID)
         private String userId;

@@ -13,6 +13,8 @@ import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.WaitingQueue.Preferences;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchResultResponse;
+import com.nhomgame.domain.match.dto.MatchResultResponse.PlayerResultInfo;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
 import com.nhomgame.infrastructure.match.WaitingQueueRepository;
@@ -436,6 +438,121 @@ public class MatchServiceImpl implements MatchService {
         } while (matchRepository.existsByPinCode(pinCode));
 
         return pinCode;
+    }
+
+    @Override
+    public MatchResultResponse getMatchResult(String matchId) {
+        // Try to find match from 'matches' collection first
+        Match match = matchRepository.findById(matchId).orElse(null);
+
+        // If not found or not finished, attempt to query from matchHistory
+        // (In a future implementation, we would query a separate matchHistory collection)
+        if (match == null || !"finished".equals(match.getStatus())) {
+            throw new IllegalArgumentException("Match not found or match is not finished");
+        }
+
+        // Build player result list
+        java.util.List<PlayerResultInfo> playerResults = new java.util.ArrayList<>();
+
+        String winnerUsername = null;
+        int totalMoveCount = (match.getMoves() != null) ? match.getMoves().size() : 0;
+
+        // Get winner information
+        if (match.getWinnerId() != null) {
+            User winner = userRepository.findById(match.getWinnerId()).orElse(null);
+            if (winner != null) {
+                winnerUsername = winner.getUsername();
+            }
+        }
+
+        // Process each player
+        for (Player player : match.getPlayers()) {
+            String userId = player.getUserId();
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null) continue;
+
+            // Calculate ELO changes using simple ELO formula
+            boolean isWinner = match.getWinnerId() != null && match.getWinnerId().equals(userId);
+            int rankBefore = user.getRank();
+            int rankChange = calculateEloChange(rankBefore, isWinner, match.getPlayers().size());
+            int rankAfter = rankBefore + rankChange;
+
+            // Count mine hits for this player
+            int mineHits = countMineHitsForPlayer(match, userId);
+
+            PlayerResultInfo playerInfo = new PlayerResultInfo(
+                userId,
+                user.getUsername(),
+                player.getHealth(),
+                mineHits,
+                player.isAlive(),
+                rankBefore,
+                rankAfter,
+                isWinner
+            );
+
+            playerResults.add(playerInfo);
+        }
+
+        // Create and return result response
+        MatchResultResponse response = new MatchResultResponse(
+            matchId,
+            match.getStatus(),
+            match.getStartedAt(),
+            match.getFinishedAt(),
+            totalMoveCount,
+            match.getWinnerId(),
+            winnerUsername,
+            playerResults
+        );
+
+        log.info("Match result retrieved for match {}: winner={}, totalMoves={}, players={}", 
+                matchId, match.getWinnerId(), totalMoveCount, playerResults.size());
+
+        return response;
+    }
+
+    /**
+     * Calculate ELO change based on win/loss and players count
+     * Simplified ELO calculation: +30 for win, -20 for loss (can be adjusted)
+     */
+    private int calculateEloChange(int currentRank, boolean won, int playersCount) {
+        // Base ELO change values
+        int winPoints = 30;
+        int lossPoints = -20;
+
+        // Adjust for number of players if needed
+        if (playersCount > 2) {
+            winPoints = (winPoints * 2) / playersCount;
+            lossPoints = (lossPoints * 2) / playersCount;
+        }
+
+        return won ? winPoints : lossPoints;
+    }
+
+    /**
+     * Count the number of mines hit by a specific player
+     * A mine hit is counted when action="open" and result="bomb"
+     */
+    private int countMineHitsForPlayer(Match match, String playerId) {
+        if (match.getMoves() == null) {
+            return 0;
+        }
+
+        // Count moves where playerId hit a mine
+        // Note: This requires tracking move results in the Move object
+        // For now, we count based on health loss (3 - current health)
+        Player player = match.getPlayers().stream()
+                .filter(p -> p.getUserId().equals(playerId))
+                .findFirst()
+                .orElse(null);
+
+        if (player == null) {
+            return 0;
+        }
+
+        // Calculate mine hits as initial health (3) minus current health
+        return Math.max(0, 3 - player.getHealth());
     }
 
 }

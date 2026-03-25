@@ -119,6 +119,16 @@ public class AuthService {
         return userRepository.findById(id).orElse(null);
     }
 
+    @Caching(put = {
+            @CachePut(value = "users", key = "#user.id"),
+            @CachePut(value = "users", key = "#user.username"),
+            @CachePut(value = "users", key = "#user.email")
+    })
+    public User saveUser(@NonNull User user) {
+        user.setModifiedAt(Instant.now());
+        return userRepository.save(user);
+    }
+
     public boolean checkPassword(String raw, String encoded) {
         return passwordEncoder.matches(raw, encoded);
     }

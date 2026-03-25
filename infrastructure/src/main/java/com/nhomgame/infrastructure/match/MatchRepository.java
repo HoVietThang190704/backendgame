@@ -33,14 +33,10 @@ public interface MatchRepository extends MongoRepository<Match, String> {
      * Find active matches by host ID
      */
     Optional<Match> findByHostIdAndStatusIn(String hostId, List<String> statuses);
-<<<<<<< HEAD
-    
-=======
 
     /**
      * Find matches where players list contains the given userId and status is in the given list
      */
     @Query("{ 'players.userId': ?0, 'status': { $in: ?1 } }")
     List<Match> findByPlayersContainingAndStatusIn(String userId, List<String> statuses);
->>>>>>> origin/develop
 }

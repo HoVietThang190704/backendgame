@@ -122,9 +122,13 @@ public class MatchServiceImpl implements MatchService {
             widthReq != null ? widthReq : 10,
             heightReq != null ? heightReq : 10,
             mineCountReq != null ? mineCountReq : 20,
-            difficultyReq != null ? difficultyReq : "medium"
+            difficultyReq != null ? difficultyReq : "medium",
+            3,
+            new java.util.ArrayList<>(),
+            new java.util.ArrayList<>(),
+            new java.util.ArrayList<>()
         );
-        match.setGameBoard(gameBoard);
+        match.getGameBoard().put(userId, gameBoard);
 
         // 6. Add host player to players list
         Player hostPlayer = new Player(userId, user.getUsername());

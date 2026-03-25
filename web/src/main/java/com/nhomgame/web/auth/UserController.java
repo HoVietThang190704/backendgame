@@ -155,6 +155,10 @@ public class UserController {
             // Ranking
             FIELD_MAP.put("rank", "rank");
             FIELD_MAP.put("ranking", "rank");
+            FIELD_MAP.put("wins", "wins");
+            FIELD_MAP.put("losses", "losses");
+            FIELD_MAP.put("winRate", "winRate");
+            FIELD_MAP.put("win_rate", "winRate");
 
             // Timestamps
             FIELD_MAP.put("createdAt", "createdAt");
@@ -209,6 +213,9 @@ public class UserController {
                 case "isActive" -> user.getIsActive();
                 case "currentMatchId" -> user.getCurrentMatchId();
                 case "rank" -> user.getRank();
+                case "wins" -> user.getWins();
+                case "losses" -> user.getLosses();
+                case "winRate" -> user.getWinRate();
                 case "createdAt" -> user.getCreatedAt();
                 case "modifiedAt" -> user.getModifiedAt();
                 case "lastLogin" -> user.getLastLogin();

@@ -17,13 +17,16 @@ public class UserResponse {
     private Boolean isActive;
     private String currentMatchId;
     private int rank;
+    private int wins;
+    private int losses;
+    private double winRate;
     private Instant createdAt;
     private Instant modifiedAt;
     private Instant lastLogin;
 
     public UserResponse() {}
 
-    public UserResponse(String id, String username, String name, String email, Set<Role> roles, String avatarUrl, String rule, String role, Boolean isActive, String currentMatchId, int rank, Instant createdAt, Instant modifiedAt, Instant lastLogin) {
+    public UserResponse(String id, String username, String name, String email, Set<Role> roles, String avatarUrl, String rule, String role, Boolean isActive, String currentMatchId, int rank, int wins, int losses, double winRate, Instant createdAt, Instant modifiedAt, Instant lastLogin) {
         this.id = id;
         this.username = username;
         this.name = name;
@@ -35,6 +38,9 @@ public class UserResponse {
         this.isActive = isActive;
         this.currentMatchId = currentMatchId;
         this.rank = rank;
+        this.wins = wins;
+        this.losses = losses;
+        this.winRate = winRate;
         this.createdAt = createdAt;
         this.modifiedAt = modifiedAt;
         this.lastLogin = lastLogin;
@@ -52,6 +58,9 @@ public class UserResponse {
         this.isActive = u.isActive();
         this.currentMatchId = u.getCurrentMatchId();
         this.rank = u.getRank();
+        this.wins = u.getWins();
+        this.losses = u.getLosses();
+        this.winRate = u.getWinRate();
         this.createdAt = u.getCreatedAt();
         this.modifiedAt = u.getModifiedAt();
         this.lastLogin = u.getLastLogin();
@@ -68,6 +77,9 @@ public class UserResponse {
     public Boolean getIsActive() { return isActive; }
     public String getCurrentMatchId() { return currentMatchId; }
     public int getRank() { return rank; }
+    public int getWins() { return wins; }
+    public int getLosses() { return losses; }
+    public double getWinRate() { return winRate; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getModifiedAt() { return modifiedAt; }
     public Instant getLastLogin() { return lastLogin; }

@@ -108,17 +108,14 @@ public class MatchServiceImpl implements MatchService {
 
         // 2. Check if user is already in an active match - nhưng phải verify match còn tồn tại
         if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
-            Match activeMatch = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
-            // Nếu match tồn tại và còn active (waiting hoặc playing)
-            if (activeMatch != null && ("waiting".equals(activeMatch.getStatus()) || "playing".equals(activeMatch.getStatus()))) {
+            Match currentMatch = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
+            if (currentMatch != null && ("waiting".equalsIgnoreCase(currentMatch.getStatus()) || "playing".equalsIgnoreCase(currentMatch.getStatus()))) {
                 throw new IllegalArgumentException("User is already in an active match");
             }
-            // Nếu match không tồn tại hoặc đã kết thúc, clear currentMatchId
-            if (activeMatch == null || "finished".equals(activeMatch.getStatus()) || "cancelled".equals(activeMatch.getStatus())) {
-                user.setCurrentMatchId(null);
-                userRepository.save(user);
-                log.info("Cleared stale currentMatchId for user {}", userId);
-            }
+            // stale reference: match no longer exists or not active, cleanup and continue
+            user.setCurrentMatchId(null);
+            user.setModifiedAt(Instant.now());
+            userRepository.save(user);
         }
 
         // 3. Generate unique 4-digit PIN code
@@ -142,9 +139,13 @@ public class MatchServiceImpl implements MatchService {
             widthReq != null ? widthReq : 10,
             heightReq != null ? heightReq : 10,
             mineCountReq != null ? mineCountReq : 20,
-            difficultyReq != null ? difficultyReq : "medium"
+            difficultyReq != null ? difficultyReq : "medium",
+            3,
+            new java.util.ArrayList<>(),
+            new java.util.ArrayList<>(),
+            new java.util.ArrayList<>()
         );
-        match.setGameBoard(gameBoard);
+        match.getGameBoard().put(userId, gameBoard);
 
         // 6. Add host player to players list
         Player hostPlayer = new Player(userId, user.getUsername());
@@ -277,14 +278,86 @@ public class MatchServiceImpl implements MatchService {
 
     @Override
     public void markPlayerDisconnected(String matchId, String userId) {
-        Match match = getMatchById(matchId);
-        if (match == null) return;
-
-        match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
-        if (match.getPlayers().isEmpty()) {
-            match.setStatus("cancelled");
+        try {
+            leaveMatch(matchId, userId);
+        } catch (Exception ex) {
+            log.warn("Error disconnecting player {} from match {}: {}", userId, matchId, ex.getMessage());
         }
-        matchRepository.save(match);
+    }
+
+    @Override
+    public Match leaveMatch(String matchId, String userId) {
+        Match match = getMatchById(matchId);
+
+        // If match is already deleted from DB, still clear user state
+        if (match == null) {
+            log.warn("leaveMatch: match {} not found, clearing currentMatchId for user {}", matchId, userId);
+            var staleUser = authService.findById(userId);
+            if (staleUser != null && staleUser.getCurrentMatchId() != null && staleUser.getCurrentMatchId().equals(matchId)) {
+                staleUser.setCurrentMatchId(null);
+                authService.saveUser(staleUser);
+            }
+            return null;
+        }
+
+        boolean removed = match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
+        if (!removed) {
+            throw new IllegalArgumentException("User is not part of this match");
+        }
+
+        // Clean board for leaving player
+        if (match.getGameBoard() != null) {
+            match.getGameBoard().remove(userId);
+        }
+
+        // Handle host transfer / room cleanup
+        if (match.getHostId() != null && match.getHostId().equals(userId)) {
+            if (match.getPlayers().isEmpty()) {
+                matchRepository.delete(match);
+                log.info("Host {} left and match {} had no players; deleted", userId, matchId);
+                // reset leaving user in AuthService
+                var leavingUser = authService.findById(userId);
+                if (leavingUser != null) {
+                    leavingUser.setCurrentMatchId(null);
+                    authService.saveUser(leavingUser);
+                }
+                return null;
+            } else {
+                Match.Player newHost = match.getPlayers().get(0);
+                match.setHostId(newHost.getUserId());
+                log.info("Host {} left match {}. New host {}", userId, matchId, newHost.getUserId());
+            }
+        }
+
+        // If no players remain, delete match
+        if (match.getPlayers().isEmpty()) {
+            matchRepository.delete(match);
+            log.info("Match {} emptied after {} leaving and was deleted", matchId, userId);
+        } else {
+            // Adjust current player if needed
+            if (match.getCurrentPlayerId() != null && match.getCurrentPlayerId().equals(userId)) {
+                String newCurrent = match.getPlayers().get(0).getUserId();
+                match.setCurrentPlayerId(newCurrent);
+                match.setCurrentTurn(0);
+            }
+
+            // If only one player remains, move to waiting status
+            if (match.getPlayers().size() < 2 && "playing".equalsIgnoreCase(match.getStatus())) {
+                match.setStatus("waiting");
+            }
+
+            match.setUpdatedAt(Instant.now());
+            matchRepository.save(match);
+        }
+
+        // Clear user currentMatchId
+        var leavingUser2 = authService.findById(userId);
+        if (leavingUser2 != null) {
+            leavingUser2.setCurrentMatchId(null);
+            authService.saveUser(leavingUser2);
+        }
+
+        return match;
     }
 
     @Override

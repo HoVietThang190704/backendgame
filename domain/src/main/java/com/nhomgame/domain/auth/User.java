@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.IndexDirection;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -26,7 +27,11 @@ public class User {
     private String rule = "user";
     private boolean isActive = true;
     private String currentMatchId;
+    @Indexed(direction = IndexDirection.DESCENDING)
     private int rank = 1000; // Default rank for matching
+    private int wins = 0;
+    private int losses = 0;
+    private double winRate = 0.0;
     private Set<Role> roles = new HashSet<>();
     private Instant createdAt = Instant.now();
     private Instant modifiedAt = Instant.now();
@@ -123,6 +128,37 @@ public class User {
 
     public void setRank(int rank) {
         this.rank = rank;
+    }
+
+    public int getWins() {
+        return wins;
+    }
+
+    public void setWins(int wins) {
+        this.wins = wins;
+        recalculateWinRate();
+    }
+
+    public int getLosses() {
+        return losses;
+    }
+
+    public void setLosses(int losses) {
+        this.losses = losses;
+        recalculateWinRate();
+    }
+
+    public double getWinRate() {
+        return winRate;
+    }
+
+    public void setWinRate(double winRate) {
+        this.winRate = winRate;
+    }
+
+    private void recalculateWinRate() {
+        int total = this.wins + this.losses;
+        this.winRate = (total > 0) ? (this.wins * 100.0 / total) : 0.0;
     }
 
     public Set<Role> getRoles() {

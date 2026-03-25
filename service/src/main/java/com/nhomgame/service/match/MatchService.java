@@ -81,4 +81,11 @@ public interface MatchService {
      * Mark player as disconnected
      */
     void markPlayerDisconnected(String matchId, String userId);
+
+    /**
+     * Player leaves match explicitly.
+     * 
+     * @return updated match instance, or null if match deleted
+     */
+    Match leaveMatch(String matchId, String userId);
 }

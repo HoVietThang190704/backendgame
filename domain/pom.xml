@@ -32,5 +32,12 @@
             <artifactId>jakarta.persistence-api</artifactId>
         </dependency>
 
+        <!-- Lombok annotations/processor for domain models -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
     </dependencies>
 </project>

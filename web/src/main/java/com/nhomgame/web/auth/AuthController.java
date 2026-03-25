@@ -14,11 +14,13 @@ import com.nhomgame.domain.auth.dto.JwtResponse;
 import com.nhomgame.domain.auth.dto.LoginRequest;
 import com.nhomgame.domain.auth.dto.SignupRequest;
 import com.nhomgame.domain.auth.dto.TokenRefreshRequest;
+import com.nhomgame.domain.auth.dto.ChangePasswordRequest;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.auth.JwtService;
 import com.nhomgame.web.dto.ApiResponse;
 
 import jakarta.validation.Valid;
+import java.security.Principal;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -95,6 +97,37 @@ public class AuthController {
             return ResponseEntity.ok(new ApiResponse<>(200, true, "Logout successful", null));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        }
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<ApiResponse<Void>> changePassword(
+            @Valid @RequestBody ChangePasswordRequest req,
+            Principal principal) {
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        // Validate passwords match
+        if (!req.getNewPassword().equals(req.getConfirmPassword())) {
+            return ResponseEntity.badRequest()
+                    .body(new ApiResponse<>(400, false, "New passwords do not match", null));
+        }
+
+        try {
+            authService.changePassword(user.getId(), req.getCurrentPassword(), req.getNewPassword());
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Password changed successfully", null));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest()
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
         }
     }
 }

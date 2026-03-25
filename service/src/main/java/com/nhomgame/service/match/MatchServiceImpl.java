@@ -13,6 +13,8 @@ import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.WaitingQueue.Preferences;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchResultResponse;
+import com.nhomgame.domain.match.dto.MatchResultResponse.PlayerResultInfo;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
 import com.nhomgame.infrastructure.match.WaitingQueueRepository;
@@ -49,9 +51,19 @@ public class MatchServiceImpl implements MatchService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        // 2. Check if user is already in a match
+        // 2. Check if user is already in a match - nhưng phải verify match còn tồn tại
         if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
-            throw new IllegalArgumentException("User is already in an active match");
+            Match activeMatch = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
+            // Nếu match tồn tại và còn active (waiting hoặc playing)
+            if (activeMatch != null && ("waiting".equals(activeMatch.getStatus()) || "playing".equals(activeMatch.getStatus()))) {
+                throw new IllegalArgumentException("User is already in an active match");
+            }
+            // Nếu match không tồn tại hoặc đã kết thúc, clear currentMatchId
+            if (activeMatch == null || "finished".equals(activeMatch.getStatus()) || "cancelled".equals(activeMatch.getStatus())) {
+                user.setCurrentMatchId(null);
+                userRepository.save(user);
+                log.info("Cleared stale currentMatchId for user {}", userId);
+            }
         }
 
         // 3. Check if already in waiting queue
@@ -96,7 +108,7 @@ public class MatchServiceImpl implements MatchService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        // 2. Check if user is already in an active match
+        // 2. Check if user is already in an active match - nhưng phải verify match còn tồn tại
         if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
             Match currentMatch = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
             if (currentMatch != null && ("waiting".equalsIgnoreCase(currentMatch.getStatus()) || "playing".equalsIgnoreCase(currentMatch.getStatus()))) {
@@ -357,6 +369,63 @@ public class MatchServiceImpl implements MatchService {
         return match;
     }
 
+    @Override
+    public Match joinMatchWithPin(String userId, String username, String pinCode) {
+        // 1. Tìm trận đấu có pinCode tương ứng
+        Match match = matchRepository.findByPinCode(pinCode)
+                .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy phòng chờ với mã PIN này."));
+
+        // Kiểm tra status = "waiting"
+        if (!"waiting".equals(match.getStatus())) {
+            throw new IllegalArgumentException("Phòng này không ở trạng thái chờ");
+        }
+
+        // 2. Kiểm tra số lượng người chơi hiện tại, nếu đã đủ 2 người thì báo lỗi "Room Full"
+        if (match.getPlayers() != null && match.getPlayers().size() >= 2) {
+            throw new IllegalArgumentException("Room Full");
+        }
+
+        // Kiểm tra xem user có lỡ tự join lại phòng của chính mình không
+        boolean alreadyInRoom = match.getPlayers().stream()
+                .anyMatch(p -> p.getUserId().equals(userId));
+        if (alreadyInRoom) {
+            throw new IllegalArgumentException("Bạn đã ở trong phòng này rồi.");
+        }
+
+        // 3. Thêm người chơi mới vào mảng players với playerNumber: 2 và isReady: false
+        Match.Player player2 = new Match.Player(userId, username);
+        player2.setReady(false);
+        player2.setHealth(3);
+        player2.setAlive(true);
+        player2.setJoinedAt(Instant.now());
+
+        match.getPlayers().add(player2);
+
+        // 4. Nếu đủ 2 người, tự động update match status từ "waiting" -> "ready"
+        // Khi đủ 2 người, match chuyển sang trạng thái "ready" (chờ cả 2 ready để play)
+        if (match.getPlayers().size() >= 2) {
+            match.setStatus("ready");
+            match.setUpdatedAt(Instant.now());
+            log.info("Match {} now has 2 players, status changed to 'ready'", match.getId());
+        }
+
+        // Lưu bản ghi Match đã cập nhật vào DB
+        Match savedMatch = matchRepository.save(match);
+
+        // 5. Cập nhật currentMatchId cho người chơi vừa tham gia
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null) {
+            user.setCurrentMatchId(savedMatch.getId());
+            userRepository.save(user);
+        }
+
+        // 6. Yêu cầu Real-time: Sẽ được handle bởi MatchWebSocketController
+        // (Socket notification sẽ được gửi thông qua /topic/match.{matchId})
+        log.info("User {} joined match {} successfully", userId, savedMatch.getId());
+
+        return savedMatch;
+    }
+
     /**
      * Generate a unique 4-digit PIN code (0000-9999)
      */
@@ -377,4 +446,120 @@ public class MatchServiceImpl implements MatchService {
 
         return pinCode;
     }
+
+    @Override
+    public MatchResultResponse getMatchResult(String matchId) {
+        // Try to find match from 'matches' collection first
+        Match match = matchRepository.findById(matchId).orElse(null);
+
+        // If not found or not finished, attempt to query from matchHistory
+        // (In a future implementation, we would query a separate matchHistory collection)
+        if (match == null || !"finished".equals(match.getStatus())) {
+            throw new IllegalArgumentException("Match not found or match is not finished");
+        }
+
+        // Build player result list
+        java.util.List<PlayerResultInfo> playerResults = new java.util.ArrayList<>();
+
+        String winnerUsername = null;
+        int totalMoveCount = (match.getMoves() != null) ? match.getMoves().size() : 0;
+
+        // Get winner information
+        if (match.getWinnerId() != null) {
+            User winner = userRepository.findById(match.getWinnerId()).orElse(null);
+            if (winner != null) {
+                winnerUsername = winner.getUsername();
+            }
+        }
+
+        // Process each player
+        for (Player player : match.getPlayers()) {
+            String userId = player.getUserId();
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null) continue;
+
+            // Calculate ELO changes using simple ELO formula
+            boolean isWinner = match.getWinnerId() != null && match.getWinnerId().equals(userId);
+            int rankBefore = user.getRank();
+            int rankChange = calculateEloChange(rankBefore, isWinner, match.getPlayers().size());
+            int rankAfter = rankBefore + rankChange;
+
+            // Count mine hits for this player
+            int mineHits = countMineHitsForPlayer(match, userId);
+
+            PlayerResultInfo playerInfo = new PlayerResultInfo(
+                userId,
+                user.getUsername(),
+                player.getHealth(),
+                mineHits,
+                player.isAlive(),
+                rankBefore,
+                rankAfter,
+                isWinner
+            );
+
+            playerResults.add(playerInfo);
+        }
+
+        // Create and return result response
+        MatchResultResponse response = new MatchResultResponse(
+            matchId,
+            match.getStatus(),
+            match.getStartedAt(),
+            match.getFinishedAt(),
+            totalMoveCount,
+            match.getWinnerId(),
+            winnerUsername,
+            playerResults
+        );
+
+        log.info("Match result retrieved for match {}: winner={}, totalMoves={}, players={}", 
+                matchId, match.getWinnerId(), totalMoveCount, playerResults.size());
+
+        return response;
+    }
+
+    /**
+     * Calculate ELO change based on win/loss and players count
+     * Simplified ELO calculation: +30 for win, -20 for loss (can be adjusted)
+     */
+    private int calculateEloChange(int currentRank, boolean won, int playersCount) {
+        // Base ELO change values
+        int winPoints = 30;
+        int lossPoints = -20;
+
+        // Adjust for number of players if needed
+        if (playersCount > 2) {
+            winPoints = (winPoints * 2) / playersCount;
+            lossPoints = (lossPoints * 2) / playersCount;
+        }
+
+        return won ? winPoints : lossPoints;
+    }
+
+    /**
+     * Count the number of mines hit by a specific player
+     * A mine hit is counted when action="open" and result="bomb"
+     */
+    private int countMineHitsForPlayer(Match match, String playerId) {
+        if (match.getMoves() == null) {
+            return 0;
+        }
+
+        // Count moves where playerId hit a mine
+        // Note: This requires tracking move results in the Move object
+        // For now, we count based on health loss (3 - current health)
+        Player player = match.getPlayers().stream()
+                .filter(p -> p.getUserId().equals(playerId))
+                .findFirst()
+                .orElse(null);
+
+        if (player == null) {
+            return 0;
+        }
+
+        // Calculate mine hits as initial health (3) minus current health
+        return Math.max(0, 3 - player.getHealth());
+    }
+
 }

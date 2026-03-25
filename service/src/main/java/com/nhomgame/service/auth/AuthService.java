@@ -152,4 +152,12 @@ public class AuthService {
     public void deleteRefreshTokensForUser(String userId) {
         refreshTokenRepository.deleteByUserId(userId);
     }
+
+    public java.util.List<User> getLeaderboardTop10() {
+        return userRepository.findTop10ByOrderByRankDesc();
+    }
+
+    public long countUsersAboveRank(int rank) {
+        return userRepository.countByRankGreaterThan(rank);
+    }
 }

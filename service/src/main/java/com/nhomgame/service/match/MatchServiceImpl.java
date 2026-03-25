@@ -98,7 +98,14 @@ public class MatchServiceImpl implements MatchService {
 
         // 2. Check if user is already in an active match
         if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
-            throw new IllegalArgumentException("User is already in an active match");
+            Match currentMatch = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
+            if (currentMatch != null && ("waiting".equalsIgnoreCase(currentMatch.getStatus()) || "playing".equalsIgnoreCase(currentMatch.getStatus()))) {
+                throw new IllegalArgumentException("User is already in an active match");
+            }
+            // stale reference: match no longer exists or not active, cleanup and continue
+            user.setCurrentMatchId(null);
+            user.setModifiedAt(Instant.now());
+            userRepository.save(user);
         }
 
         // 3. Generate unique 4-digit PIN code
@@ -271,8 +278,16 @@ public class MatchServiceImpl implements MatchService {
     @Override
     public Match leaveMatch(String matchId, String userId) {
         Match match = getMatchById(matchId);
+
+        // If match is already deleted from DB, still clear user state
         if (match == null) {
-            throw new IllegalArgumentException("Match not found");
+            log.warn("leaveMatch: match {} not found, clearing currentMatchId for user {}", matchId, userId);
+            var staleUser = authService.findById(userId);
+            if (staleUser != null && staleUser.getCurrentMatchId() != null && staleUser.getCurrentMatchId().equals(matchId)) {
+                staleUser.setCurrentMatchId(null);
+                authService.saveUser(staleUser);
+            }
+            return null;
         }
 
         boolean removed = match.getPlayers().removeIf(p -> p.getUserId().equals(userId));

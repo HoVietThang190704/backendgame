@@ -2,6 +2,7 @@ package com.nhomgame.web.match;
 
 import java.security.Principal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.Match;
@@ -55,7 +57,7 @@ public class MatchController {
      * 
      * Add user to waiting queue to find a match
      * 
-     * Request body: { "boardSize": "medium" }
+     * Request body: {} (empty - board is fixed at 10x10 with 20 mines)
      * 
      * Authentication: Required (JWT Bearer token)
      * 
@@ -63,7 +65,7 @@ public class MatchController {
      */
     @PostMapping("/api/match/find")
     public ResponseEntity<ApiResponse<WaitingQueueResponse>> findMatch(
-            @Valid @RequestBody MatchFindRequest request,
+            @RequestBody(required = false) MatchFindRequest request,
             Principal principal) {
 
         // Authenticate user from JWT token
@@ -86,8 +88,31 @@ public class MatchController {
             // Call service to add user to waiting queue
             WaitingQueue queueEntry = matchService.findMatch(userId, request);
 
+            // Pairing fallback in web layer (important when running web module directly)
+            pairWaitingUsersIfPossible();
+
+            // If user has been paired immediately, return matchId to let FE redirect instantly
+            Match activeMatch = resolveActiveMatchByUserRecord(userId);
+
+            if (activeMatch != null && activeMatch.getId() != null && activeMatch.getPlayers() != null) {
+                log.info("Match found for user {}. Broadcasting to {} players", userId, activeMatch.getPlayers().size());
+                for (Match.Player p : activeMatch.getPlayers()) {
+                    if (p == null || p.getUserId() == null || p.getUserId().isBlank()) {
+                        log.warn("Skipping null or blank userId player");
+                        continue;
+                    }
+                    log.info("Sending WebSocket event to user {} on topic /topic/user.{}.matchmaking", p.getUserId(), p.getUserId());
+                    messagingTemplate.convertAndSend(
+                            "/topic/user." + p.getUserId() + ".matchmaking",
+                            new WsEvent<>("match_found", new MatchFoundPayload(activeMatch.getId(), activeMatch.getStatus())));
+                    log.info("WebSocket event sent successfully to user {}", p.getUserId());
+                }
+            } else {
+                log.info("No active match found for user {} yet", userId);
+            }
+
             // Map to response DTO
-            WaitingQueueResponse response = new WaitingQueueResponse(queueEntry);
+            WaitingQueueResponse response = new WaitingQueueResponse(queueEntry, activeMatch);
 
             return ResponseEntity.status(HttpStatus.CREATED)
                     .body(new ApiResponse<>(201, true, "Added to waiting queue", response));
@@ -101,6 +126,131 @@ public class MatchController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
+    }
+
+    private synchronized void pairWaitingUsersIfPossible() {
+        List<WaitingQueue> waitingUsers = waitingQueueRepository.findAll().stream()
+                .filter(q -> q != null && q.getStatus() != null && "waiting".equalsIgnoreCase(q.getStatus()))
+                .sorted(Comparator.comparing(q -> q.getJoinedAt() != null ? q.getJoinedAt() : q.getCreatedAt()))
+                .toList();
+
+        if (waitingUsers.size() < 2) {
+            return;
+        }
+
+        User firstUser = null;
+        User secondUser = null;
+        WaitingQueue firstQueue = null;
+        WaitingQueue secondQueue = null;
+
+        for (WaitingQueue queue : waitingUsers) {
+            User candidate = resolveEligibleUserForPairing(queue);
+            if (candidate == null) {
+                continue;
+            }
+
+            if (firstUser == null) {
+                firstUser = candidate;
+                firstQueue = queue;
+                continue;
+            }
+
+            if (firstUser.getId().equals(candidate.getId())) {
+                continue;
+            }
+
+            secondUser = candidate;
+            secondQueue = queue;
+            break;
+        }
+
+        if (firstUser == null || secondUser == null || firstQueue == null || secondQueue == null) {
+            return;
+        }
+
+        Match match = new Match("public", firstUser.getId(), null);
+        match.setStatus("PREPARATION");
+        match.setCurrentPlayerId(firstUser.getId());
+        match.setTurnTimeLimit(30);
+        match.setCurrentTurn(0);
+        match.setCreatedAt(java.time.Instant.now());
+        match.setUpdatedAt(java.time.Instant.now());
+
+        Match.Player player1 = new Match.Player(firstUser.getId(), firstUser.getUsername());
+        player1.setReady(false);
+        player1.setHealth(3);
+
+        Match.Player player2 = new Match.Player(secondUser.getId(), secondUser.getUsername());
+        player2.setReady(false);
+        player2.setHealth(3);
+
+        match.getPlayers().add(player1);
+        match.getPlayers().add(player2);
+
+        Match.GameBoard board1 = new Match.GameBoard(10, 10, 20, "medium", 3,
+                new java.util.ArrayList<>(), new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        Match.GameBoard board2 = new Match.GameBoard(10, 10, 20, "medium", 3,
+                new java.util.ArrayList<>(), new java.util.ArrayList<>(), new java.util.ArrayList<>());
+
+        match.getGameBoard().put(firstUser.getId(), board1);
+        match.getGameBoard().put(secondUser.getId(), board2);
+
+        Match createdMatch = matchRepository.save(match);
+
+        firstUser.setCurrentMatchId(createdMatch.getId());
+        firstUser.setModifiedAt(java.time.Instant.now());
+        userRepository.save(firstUser);
+
+        secondUser.setCurrentMatchId(createdMatch.getId());
+        secondUser.setModifiedAt(java.time.Instant.now());
+        userRepository.save(secondUser);
+
+        waitingQueueRepository.deleteById(firstQueue.getId());
+        waitingQueueRepository.deleteById(secondQueue.getId());
+
+        log.info("[WEB PAIRING] Matched users {} and {} into match {}", firstUser.getId(), secondUser.getId(), createdMatch.getId());
+    }
+
+    private User resolveEligibleUserForPairing(WaitingQueue queue) {
+        if (queue == null || queue.getUserId() == null || queue.getUserId().isBlank()) {
+            if (queue != null && queue.getId() != null) {
+                waitingQueueRepository.deleteById(queue.getId());
+            }
+            return null;
+        }
+
+        User user = userRepository.findById(queue.getUserId()).orElse(null);
+        if (user == null) {
+            waitingQueueRepository.deleteById(queue.getId());
+            return null;
+        }
+
+        String currentMatchId = user.getCurrentMatchId();
+        if (currentMatchId == null || currentMatchId.isBlank()) {
+            return user;
+        }
+
+        Match existing = matchRepository.findById(currentMatchId).orElse(null);
+        if (existing != null && ACTIVE_MATCH_STATUSES.contains(existing.getStatus())) {
+            waitingQueueRepository.deleteById(queue.getId());
+            return null;
+        }
+
+        user.setCurrentMatchId(null);
+        user.setModifiedAt(java.time.Instant.now());
+        userRepository.save(user);
+        return user;
+    }
+
+    private Match resolveActiveMatchByUserRecord(String userId) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null && user.getCurrentMatchId() != null && !user.getCurrentMatchId().isBlank()) {
+            Match direct = matchRepository.findById(user.getCurrentMatchId()).orElse(null);
+            if (direct != null && ACTIVE_MATCH_STATUSES.contains(direct.getStatus())) {
+                return direct;
+            }
+        }
+        return matchService.getActiveMatchForUser(userId);
     }
 
     /**
@@ -518,6 +668,8 @@ public class MatchController {
         private int rank;
         private String status;
         private String boardSize;
+        private boolean matched;
+        private String matchId;
         private java.time.Instant joinedAt;
         private java.time.Instant createdAt;
 
@@ -534,6 +686,16 @@ public class MatchController {
                     : null;
             this.joinedAt = queueEntry.getJoinedAt();
             this.createdAt = queueEntry.getCreatedAt();
+            this.matched = false;
+            this.matchId = null;
+        }
+
+        public WaitingQueueResponse(WaitingQueue queueEntry, Match activeMatch) {
+            this(queueEntry);
+            if (activeMatch != null && activeMatch.getId() != null) {
+                this.matched = true;
+                this.matchId = activeMatch.getId();
+            }
         }
 
         // Getters
@@ -577,6 +739,22 @@ public class MatchController {
             this.boardSize = boardSize;
         }
 
+        public boolean isMatched() {
+            return matched;
+        }
+
+        public void setMatched(boolean matched) {
+            this.matched = matched;
+        }
+
+        public String getMatchId() {
+            return matchId;
+        }
+
+        public void setMatchId(String matchId) {
+            this.matchId = matchId;
+        }
+
         public java.time.Instant getJoinedAt() {
             return joinedAt;
         }
@@ -591,6 +769,84 @@ public class MatchController {
 
         public void setCreatedAt(java.time.Instant createdAt) {
             this.createdAt = createdAt;
+        }
+    }
+
+    public static class ActiveMatchResponse {
+        private String matchId;
+        private String status;
+        private String currentPlayerId;
+        private Integer playerCount;
+
+        public ActiveMatchResponse() {
+        }
+
+        public ActiveMatchResponse(Match match) {
+            this.matchId = match.getId();
+            this.status = match.getStatus();
+            this.currentPlayerId = match.getCurrentPlayerId();
+            this.playerCount = match.getPlayers() != null ? match.getPlayers().size() : 0;
+        }
+
+        public String getMatchId() {
+            return matchId;
+        }
+
+        public void setMatchId(String matchId) {
+            this.matchId = matchId;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public String getCurrentPlayerId() {
+            return currentPlayerId;
+        }
+
+        public void setCurrentPlayerId(String currentPlayerId) {
+            this.currentPlayerId = currentPlayerId;
+        }
+
+        public Integer getPlayerCount() {
+            return playerCount;
+        }
+
+        public void setPlayerCount(Integer playerCount) {
+            this.playerCount = playerCount;
+        }
+    }
+
+    public static class MatchFoundPayload {
+        private String matchId;
+        private String status;
+
+        public MatchFoundPayload() {
+        }
+
+        public MatchFoundPayload(String matchId, String status) {
+            this.matchId = matchId;
+            this.status = status;
+        }
+
+        public String getMatchId() {
+            return matchId;
+        }
+
+        public void setMatchId(String matchId) {
+            this.matchId = matchId;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
         }
     }
 

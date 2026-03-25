@@ -47,8 +47,10 @@ public class SecurityConfig {
                     auth.requestMatchers("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs/swagger-config").permitAll();
                     auth.requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/swagger-ui/index.html").permitAll();
                     auth.requestMatchers("/api/auth/**").permitAll();
+                    auth.requestMatchers("/ws-game", "/ws-game/**").permitAll();
                 } else {
                     auth.requestMatchers("/api/auth/**").permitAll();
+                    auth.requestMatchers("/ws-game", "/ws-game/**").permitAll();
                 }
                 auth.anyRequest().authenticated();
             });

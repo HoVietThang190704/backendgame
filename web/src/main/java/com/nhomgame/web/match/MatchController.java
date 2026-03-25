@@ -14,7 +14,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.Match;
@@ -22,6 +21,9 @@ import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
 import com.nhomgame.domain.match.dto.WsEvent;
+import com.nhomgame.infrastructure.auth.UserRepository;
+import com.nhomgame.infrastructure.match.MatchRepository;
+import com.nhomgame.infrastructure.match.WaitingQueueRepository;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.service.match.MatchService;
 import com.nhomgame.service.match.MatchmakingService;
@@ -41,15 +43,23 @@ public class MatchController {
     private final AuthService authService;
     private final MatchmakingService matchmakingService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final WaitingQueueRepository waitingQueueRepository;
+    private final MatchRepository matchRepository;
+    private final UserRepository userRepository;
 
+    private static final java.util.Set<String> ACTIVE_MATCH_STATUSES = java.util.Set.of("waiting", "PREPARATION", "playing");
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchController.class);
 
     public MatchController(MatchService matchService, AuthService authService, MatchmakingService matchmakingService,
-                           SimpMessagingTemplate messagingTemplate) {
+                           SimpMessagingTemplate messagingTemplate, WaitingQueueRepository waitingQueueRepository,
+                           MatchRepository matchRepository, UserRepository userRepository) {
         this.matchService = matchService;
         this.authService = authService;
         this.matchmakingService = matchmakingService;
         this.messagingTemplate = messagingTemplate;
+        this.waitingQueueRepository = waitingQueueRepository;
+        this.matchRepository = matchRepository;
+        this.userRepository = userRepository;
     }
 
     /**

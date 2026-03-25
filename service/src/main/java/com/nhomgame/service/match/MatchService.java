@@ -51,6 +51,11 @@ public interface MatchService {
     Match getMatchByPin(String pinCode);
 
     /**
+     * Get active match (waiting/preparation/playing) for user
+     */
+    Match getActiveMatchForUser(String userId);
+
+    /**
      * Add player to a match
      */
     Match addPlayer(String matchId, String userId);

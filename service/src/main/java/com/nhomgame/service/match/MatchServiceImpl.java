@@ -167,6 +167,13 @@ public class MatchServiceImpl implements MatchService {
     }
 
     @Override
+    public Match getActiveMatchForUser(String userId) {
+        java.util.List<String> activeStatuses = java.util.Arrays.asList("waiting", "PREPARATION", "playing");
+        java.util.List<Match> matches = matchRepository.findByPlayersContainingAndStatusIn(userId, activeStatuses);
+        return (matches != null && !matches.isEmpty()) ? matches.get(0) : null;
+    }
+
+    @Override
     public Match addPlayer(String matchId, String userId) {
         Match match = getMatchById(matchId);
         if (match == null) throw new IllegalArgumentException("Match not found");

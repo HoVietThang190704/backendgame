@@ -4,6 +4,7 @@ import java.security.Principal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -223,7 +224,7 @@ public class MatchController {
             return;
         }
 
-        Match match = new Match("public", firstUser.getId(), null);
+        Match match = new Match("public", firstUser.getId(), generatePublicMatchPin());
         match.setStatus("PREPARATION");
         match.setCurrentPlayerId(firstUser.getId());
         match.setTurnTimeLimit(30);
@@ -264,6 +265,19 @@ public class MatchController {
         waitingQueueRepository.deleteById(secondQueue.getId());
 
         log.info("[WEB PAIRING] Matched users {} and {} into match {}", firstUser.getId(), secondUser.getId(), createdMatch.getId());
+    }
+
+    private String generatePublicMatchPin() {
+        final int maxAttempts = 10;
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            String pin = "PUB-" + UUID.randomUUID().toString().substring(0, 8);
+            if (!matchRepository.existsByPinCode(pin)) {
+                return pin;
+            }
+        }
+
+        throw new IllegalStateException("Unable to generate unique pin code for public match");
     }
 
     private User resolveEligibleUserForPairing(WaitingQueue queue) {

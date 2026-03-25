@@ -1,6 +1,8 @@
 package com.nhomgame.service.match;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Random;
 
 import org.springframework.stereotype.Service;
@@ -28,6 +30,9 @@ public class MatchServiceImpl implements MatchService {
     private final UserRepository userRepository;
     private final com.nhomgame.service.auth.AuthService authService;
     private final Random random = new Random();
+    private static final List<String> ACTIVE_MATCH_STATUSES = List.of(
+            "waiting", "WAITING", "PREPARATION", "PLAYING", "playing");
+    private static final long STALE_PREPARATION_TIMEOUT_MINUTES = 10;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchServiceImpl.class);
 
@@ -43,15 +48,31 @@ public class MatchServiceImpl implements MatchService {
 
     @Override
     public WaitingQueue findMatch(String userId, MatchFindRequest request) {
-        log.info("User {} requesting to find match with boardSize: {}", userId, request.getBoardSize());
+        String boardSize = request != null ? request.getBoardSize() : null;
+        if (boardSize == null || boardSize.isBlank()) {
+            boardSize = "medium";
+        }
+        log.info("User {} requesting to find match with boardSize: {}", userId, boardSize);
 
         // 1. Get user by ID
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        // 2. Check if user is already in a match
-        if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
+        // 2. Resolve active match from DB and clear stale currentMatchId if needed
+        Match activeMatch = getActiveMatchForUser(userId);
+        if (activeMatch != null) {
             throw new IllegalArgumentException("User is already in an active match");
+        }
+
+        String currentMatchId = user.getCurrentMatchId();
+        if (currentMatchId != null && !currentMatchId.isBlank()) {
+            Match referenced = matchRepository.findById(currentMatchId).orElse(null);
+            if (referenced == null || referenced.getStatus() == null
+                    || !ACTIVE_MATCH_STATUSES.contains(referenced.getStatus())) {
+                user.setCurrentMatchId(null);
+                user.setModifiedAt(Instant.now());
+                userRepository.save(user);
+            }
         }
 
         // 3. Check if already in waiting queue
@@ -66,7 +87,7 @@ public class MatchServiceImpl implements MatchService {
         }
 
         // 4. Create waiting queue entry
-        Preferences preferences = new Preferences(request.getBoardSize());
+        Preferences preferences = new Preferences(boardSize);
         WaitingQueue queueEntry = new WaitingQueue(userId, user.getRank(), preferences);
         queueEntry.setJoinedAt(Instant.now());
 
@@ -97,7 +118,7 @@ public class MatchServiceImpl implements MatchService {
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         // 2. Check if user is already in an active match
-        if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty()) {
+        if (getActiveMatchForUser(userId) != null) {
             throw new IllegalArgumentException("User is already in an active match");
         }
 
@@ -269,6 +290,70 @@ public class MatchServiceImpl implements MatchService {
             match.setStatus("cancelled");
         }
         matchRepository.save(match);
+    }
+
+    @Override
+    public Match getActiveMatchForUser(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return null;
+        }
+
+        List<Match> candidates = matchRepository.findByPlayersContainingAndStatusIn(userId, ACTIVE_MATCH_STATUSES);
+        for (Match match : candidates) {
+            if (isStalePreparation(match)) {
+                expireStaleMatch(match);
+                continue;
+            }
+            return match;
+        }
+
+        return null;
+    }
+
+    private boolean isStalePreparation(Match match) {
+        if (match == null || match.getStatus() == null || !"PREPARATION".equalsIgnoreCase(match.getStatus())) {
+            return false;
+        }
+
+        Instant referenceTime = match.getUpdatedAt() != null ? match.getUpdatedAt() : match.getCreatedAt();
+        if (referenceTime == null) {
+            return false;
+        }
+
+        Instant threshold = Instant.now().minus(STALE_PREPARATION_TIMEOUT_MINUTES, ChronoUnit.MINUTES);
+        return referenceTime.isBefore(threshold);
+    }
+
+    private void expireStaleMatch(Match match) {
+        if (match == null || match.getId() == null) {
+            return;
+        }
+
+        log.info("Expiring stale PREPARATION match {}", match.getId());
+        match.setStatus("cancelled");
+        match.setUpdatedAt(Instant.now());
+        matchRepository.save(match);
+
+        if (match.getPlayers() == null) {
+            return;
+        }
+
+        for (Match.Player player : match.getPlayers()) {
+            if (player == null || player.getUserId() == null || player.getUserId().isBlank()) {
+                continue;
+            }
+
+            User participant = userRepository.findById(player.getUserId()).orElse(null);
+            if (participant == null) {
+                continue;
+            }
+
+            if (match.getId().equals(participant.getCurrentMatchId())) {
+                participant.setCurrentMatchId(null);
+                participant.setModifiedAt(Instant.now());
+                userRepository.save(participant);
+            }
+        }
     }
 
     /**

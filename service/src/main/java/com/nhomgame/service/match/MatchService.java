@@ -79,4 +79,9 @@ public interface MatchService {
      * Mark player as disconnected
      */
     void markPlayerDisconnected(String matchId, String userId);
+
+    /**
+     * Resolve current active match of a user, if any.
+     */
+    Match getActiveMatchForUser(String userId);
 }

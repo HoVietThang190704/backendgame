@@ -8,11 +8,15 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.nhomgame.domain.auth.User;
@@ -20,6 +24,7 @@ import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchHistoryDTO;
 import com.nhomgame.domain.match.dto.WsEvent;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
@@ -60,6 +65,39 @@ public class MatchController {
         this.waitingQueueRepository = waitingQueueRepository;
         this.matchRepository = matchRepository;
         this.userRepository = userRepository;
+    }
+
+    /**
+     * GET /api/match-history
+     * 
+     * Retrieve paginated match history for authenticated user
+     */
+    @GetMapping("/api/match-history")
+    public ResponseEntity<ApiResponse<Page<MatchHistoryDTO>>> getMatchHistory(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            Principal principal) {
+            
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        try {
+            Page<MatchHistoryDTO> history = matchService.getMatchHistory(user.getId(), PageRequest.of(page, size));
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Match history fetched", history));
+        } catch (Exception ex) {
+            log.error("Error fetching match history for user {}", user.getId(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
     }
 
     /**

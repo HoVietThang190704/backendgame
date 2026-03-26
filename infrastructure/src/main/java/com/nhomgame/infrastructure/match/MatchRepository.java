@@ -3,6 +3,8 @@ package com.nhomgame.infrastructure.match;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -39,4 +41,10 @@ public interface MatchRepository extends MongoRepository<Match, String> {
      */
     @Query("{ 'players.userId': ?0, 'status': { $in: ?1 } }")
     List<Match> findByPlayersContainingAndStatusIn(String userId, List<String> statuses);
+
+    /**
+     * Find matches where players list contains the given userId and status is in the given list with pagination
+     */
+    @Query("{ 'players.userId': ?0, 'status': { $in: ?1 } }")
+    Page<Match> findByPlayersUserIdAndStatusIn(String userId, List<String> statuses, Pageable pageable);
 }

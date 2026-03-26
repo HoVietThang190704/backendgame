@@ -3,6 +3,8 @@ package com.nhomgame.service.match;
 import java.time.Instant;
 import java.util.Random;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import com.nhomgame.domain.auth.User;
@@ -13,6 +15,8 @@ import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.WaitingQueue.Preferences;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchHistoryDTO;
+import com.nhomgame.domain.match.dto.OpponentDTO;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
 import com.nhomgame.infrastructure.match.WaitingQueueRepository;
@@ -39,6 +43,62 @@ public class MatchServiceImpl implements MatchService {
         this.matchRepository = matchRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+    }
+
+    @Override
+    public Page<MatchHistoryDTO> getMatchHistory(String userId, Pageable pageable) {
+        log.info("Fetching match history for user {}", userId);
+        
+        java.util.List<String> finishedStatuses = java.util.Arrays.asList("finished", "FINISHED");
+        Page<Match> matches = matchRepository.findByPlayersUserIdAndStatusIn(userId, finishedStatuses, pageable);
+        
+        return matches.map(match -> mapToMatchHistoryDTO(match, userId));
+    }
+
+    private MatchHistoryDTO mapToMatchHistoryDTO(Match match, String userId) {
+        String result = "draw";
+        int eloChange = 0;
+        
+        if (match.getWinnerId() != null) {
+            if (match.getWinnerId().equals(userId)) {
+                result = "win";
+                eloChange = 25;
+            } else {
+                result = "lose";
+                eloChange = -20;
+            }
+        }
+        
+        long duration = 0;
+        if (match.getStartedAt() != null && match.getFinishedAt() != null) {
+            duration = java.time.Duration.between(match.getStartedAt(), match.getFinishedAt()).getSeconds();
+        }
+        
+        String opponentId = match.getPlayers().stream()
+                .map(Player::getUserId)
+                .filter(id -> id != null && !id.equals(userId))
+                .findFirst()
+                .orElse(null);
+                
+        OpponentDTO opponentDTO = new OpponentDTO("Unknown", "");
+        if (opponentId != null) {
+            User opponent = userRepository.findById(opponentId).orElse(null);
+            if (opponent != null) {
+                String displayName = (opponent.getName() != null && !opponent.getName().isBlank()) 
+                    ? opponent.getName() : opponent.getUsername();
+                opponentDTO = new OpponentDTO(displayName, opponent.getAvatarUrl());
+            }
+        }
+        
+        return MatchHistoryDTO.builder()
+                .matchId(match.getId())
+                .matchType(match.getMatchType())
+                .result(result)
+                .opponent(opponentDTO)
+                .duration(duration)
+                .eloChange(eloChange)
+                .playedAt(match.getFinishedAt() != null ? match.getFinishedAt() : match.getCreatedAt())
+                .build();
     }
 
     @Override

@@ -160,4 +160,26 @@ public class AuthService {
     public long countUsersAboveRank(int rank) {
         return userRepository.countByRankGreaterThan(rank);
     }
+
+    @CacheEvict(value = "users", allEntries = true)
+    public void changePassword(String userId, String currentPassword, String newPassword) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            throw new IllegalArgumentException("User not found");
+        }
+
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new IllegalArgumentException("Current password is incorrect");
+        }
+
+        if (currentPassword.equals(newPassword)) {
+            throw new IllegalArgumentException("New password must be different from current password");
+        }
+
+        user.setPassword(passwordEncoder.encode(newPassword));
+        user.setModifiedAt(Instant.now());
+        userRepository.save(user);
+
+        log.info("Password changed for user: {}", userId);
+    }
 }

@@ -1301,5 +1301,51 @@ public class MatchController {
             this.y = y;
         }
     }
+
+    /**
+     * GET /api/matches/{id}/result
+     *
+     * Retrieve match result details after match is finished
+     * 
+     * Returns: MatchResultResponse with:
+     * - Match duration in seconds
+     * - Total number of moves
+     * - Player information (health, mines hit, rank changes)
+     * - Winner information
+     */
+    @org.springframework.web.bind.annotation.GetMapping("/api/matches/{id}/result")
+    public ResponseEntity<ApiResponse<com.nhomgame.domain.match.dto.MatchResultResponse>> getMatchResult(
+            @org.springframework.web.bind.annotation.PathVariable("id") String matchId,
+            Principal principal) {
+
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User currentUser = authService.findByEmail(email);
+        if (currentUser == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        try {
+            com.nhomgame.domain.match.dto.MatchResultResponse result = matchService.getMatchResult(matchId);
+            
+            log.info("Match result retrieved for match {} by user {}", matchId, currentUser.getId());
+            
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Match result retrieved successfully", result));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid match result request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in getMatchResult", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
+    }
 }
 

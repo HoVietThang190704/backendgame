@@ -7,6 +7,7 @@ import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchResultResponse;
 import com.nhomgame.domain.match.dto.MatchHistoryDTO;
 import com.nhomgame.domain.match.dto.MoveResult;
 
@@ -79,6 +80,8 @@ public interface MatchService {
      */
     Match startMatch(String matchId);
 
+    Match joinMatchWithPin(String userId, String username, String pinCode);
+    
     /**
      * Apply a move
      */
@@ -100,4 +103,13 @@ public interface MatchService {
      * @return updated match instance, or null if match deleted
      */
     Match leaveMatch(String matchId, String userId);
+
+    /**
+     * Get match result details
+     * 
+     * @param matchId Match ID
+     * @return MatchResultResponse with detailed result information
+     * @throws IllegalArgumentException if match not found or not finished
+     */
+    MatchResultResponse getMatchResult(String matchId);
 }

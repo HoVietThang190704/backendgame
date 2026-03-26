@@ -374,7 +374,7 @@ public class MatchController {
      * Join a private room by pin code
      * Request body: { "pinCode": "4198" }
      */
-    @PostMapping("/api/matches/join")
+    @PostMapping("/api/matches/join-by-pin")
     public ResponseEntity<ApiResponse<CreateMatchResponse>> joinMatchByPin(
             @RequestBody JoinMatchByPinRequest request,
             Principal principal) {

@@ -13,11 +13,17 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
 
 import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.auth.dto.UserResponse;
 import com.nhomgame.service.auth.AuthService;
 import com.nhomgame.web.dto.ApiResponse;
+import com.nhomgame.domain.auth.dto.UpdateProfileRequest;
+
+import jakarta.validation.Valid;
 
 /**
  * REST Controller for user operations
@@ -28,6 +34,36 @@ import com.nhomgame.web.dto.ApiResponse;
 public class UserController {
 
     private final AuthService authService;
+
+    /**
+     * PUT /api/user/profile
+     *
+     * Update user profile (name, avatarUrl)
+     * Authentication: Required (JWT Bearer token)
+     *
+     * RequestBody: UpdateProfileRequest { name, avatarUrl }
+     * Response: UserResponse (updated)
+     */
+    @PutMapping("/profile")
+    public ResponseEntity<ApiResponse<UserResponse>> updateProfile(
+            @Valid @RequestBody UpdateProfileRequest req,
+            Principal principal) {
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(HttpStatus.UNAUTHORIZED.value(), false, "Unauthorized", null));
+        }
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(HttpStatus.NOT_FOUND.value(), false, "User not found", null));
+        }
+        // Update fields
+        user.setName(req.getName());
+        user.setAvatarUrl(req.getAvatarUrl());
+        User saved = authService.saveUser(user);
+        return ResponseEntity.ok(new ApiResponse<>(200, true, "Profile updated", new UserResponse(saved)));
+    }
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(UserController.class);
 

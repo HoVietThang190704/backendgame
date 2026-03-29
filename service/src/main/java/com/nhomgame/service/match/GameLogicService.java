@@ -2,6 +2,7 @@ package com.nhomgame.service.match;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,10 @@ public class GameLogicService {
         boolean bothPlacedBombs = haveBothPlayersPlacedBombs(match);
         if (bothPlacedBombs) {
             match.setStatus("PLAYING");
+            if (match.getCurrentPlayerId() == null && match.getPlayers() != null && !match.getPlayers().isEmpty()) {
+                match.setCurrentPlayerId(match.getPlayers().get(0).getUserId());
+            }
+            match.setTurnStartTime(Instant.now());
         }
 
         Match savedMatch = matchRepository.save(match);

@@ -2,8 +2,12 @@ package com.nhomgame.service.match;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
@@ -224,20 +228,44 @@ public class MatchServiceImpl implements MatchService {
         Match match = getMatchById(matchId);
         if (match == null) return null;
 
-        String result = Math.random() < 0.15 ? "bomb" : "safe";
+        if (match.getStatus() == null || !"PLAYING".equalsIgnoreCase(match.getStatus())) {
+            return null;
+        }
 
         Player player = match.getPlayers().stream()
                 .filter(p -> p.getUserId().equals(userId))
                 .findFirst().orElse(null);
         if (player == null) return null;
 
-        if ("bomb".equals(result)) {
-            player.setHealth(Math.max(0, player.getHealth() - 1));
+        Player opponent = match.getPlayers().stream()
+                .filter(p -> !p.getUserId().equals(userId))
+                .findFirst().orElse(null);
+        if (opponent == null) return null;
+
+        Match.GameBoard targetBoard = getOrCreatePlayerBoard(match, opponent.getUserId());
+        String coord = toCoordKey(x, y);
+
+        String result = "safe";
+        if ("flag".equalsIgnoreCase(action)) {
+            toggleFlag(targetBoard, coord);
+            result = "flag";
+        } else {
+            if (targetBoard.getRevealed().contains(coord)) {
+                result = "safe";
+            } else {
+                targetBoard.getRevealed().add(coord);
+                if (targetBoard.getBombs().contains(coord)) {
+                    result = "bomb";
+                    player.setHealth(Math.max(0, player.getHealth() - 1));
+                }
+            }
         }
 
         // Append move history for game state reconstruction
         Match.Move recordedMove = new Match.Move(userId, x, y, action);
         match.getMoves().add(recordedMove);
+
+        match.setUpdatedAt(Instant.now());
 
         matchRepository.save(match);
 
@@ -249,18 +277,83 @@ public class MatchServiceImpl implements MatchService {
         mr.setResult(result);
         mr.setHealth(player.getHealth());
 
+        if (hasRevealedAllSafeCells(targetBoard)) {
+            mr.setGameOver(true);
+            mr.setWinnerId(userId);
+            match.setStatus("FINISHED");
+            match.setWinnerId(userId);
+            match.setFinishedAt(Instant.now());
+            matchRepository.save(match);
+            return mr;
+        }
+
         if (player.getHealth() == 0) {
             mr.setGameOver(true);
             mr.setWinnerId(match.getPlayers().stream()
                     .filter(p -> !p.getUserId().equals(userId))
                     .findFirst()
                     .map(Player::getUserId).orElse(null));
-            match.setStatus("finished");
+            match.setStatus("FINISHED");
             match.setWinnerId(mr.getWinnerId());
+            match.setFinishedAt(Instant.now());
             matchRepository.save(match);
         }
 
         return mr;
+    }
+
+    private Match.GameBoard getOrCreatePlayerBoard(Match match, String playerId) {
+        if (match.getGameBoard() == null) {
+            match.setGameBoard(new java.util.HashMap<>());
+        }
+
+        Map<String, Match.GameBoard> boardMap = match.getGameBoard();
+        Match.GameBoard board = boardMap.get(playerId);
+        if (board == null) {
+            board = new Match.GameBoard(10, 10, 20, "medium", 3,
+                    new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            boardMap.put(playerId, board);
+        }
+
+        if (board.getBombs() == null) {
+            board.setBombs(new ArrayList<>());
+        }
+        if (board.getFlags() == null) {
+            board.setFlags(new ArrayList<>());
+        }
+        if (board.getRevealed() == null) {
+            board.setRevealed(new ArrayList<>());
+        }
+        return board;
+    }
+
+    private void toggleFlag(Match.GameBoard board, String coord) {
+        if (board.getFlags().contains(coord)) {
+            board.getFlags().remove(coord);
+        } else {
+            board.getFlags().add(coord);
+        }
+    }
+
+    private boolean hasRevealedAllSafeCells(Match.GameBoard board) {
+        int width = board.getWidth() != null ? board.getWidth() : 10;
+        int height = board.getHeight() != null ? board.getHeight() : 10;
+
+        Set<String> bombs = new HashSet<>(board.getBombs());
+        int safeCellCount = (width * height) - bombs.size();
+        if (safeCellCount <= 0) {
+            return false;
+        }
+
+        long revealedSafe = board.getRevealed().stream()
+                .filter(c -> c != null && !bombs.contains(c))
+                .distinct()
+                .count();
+        return revealedSafe >= safeCellCount;
+    }
+
+    private String toCoordKey(int x, int y) {
+        return x + "," + y;
     }
 
     @Override

@@ -2,6 +2,7 @@ package com.nhomgame.domain.match.dto;
 
 public class SendMovePayload {
     private String matchId;
+    private String userId;
     private int x;
     private int y;
     private String action;
@@ -12,6 +13,14 @@ public class SendMovePayload {
 
     public void setMatchId(String matchId) {
         this.matchId = matchId;
+    }
+
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
     }
 
     public int getX() {

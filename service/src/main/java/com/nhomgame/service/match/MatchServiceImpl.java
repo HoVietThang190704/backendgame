@@ -2,7 +2,9 @@ package com.nhomgame.service.match;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +17,7 @@ import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.Match.GameBoard;
 import com.nhomgame.domain.match.Match.Player;
+import com.nhomgame.domain.match.dto.MoveResult.RevealedCellResult;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.WaitingQueue.Preferences;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
@@ -37,6 +40,8 @@ public class MatchServiceImpl implements MatchService {
     private static final List<String> ACTIVE_MATCH_STATUSES = List.of(
             "waiting", "WAITING", "PREPARATION", "PLAYING", "playing");
     private static final long STALE_PREPARATION_TIMEOUT_MINUTES = 10;
+        private static final int WINNER_ELO_DELTA = 20;
+        private static final int LOSER_ELO_DELTA = -10;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchServiceImpl.class);
 
@@ -159,6 +164,7 @@ public class MatchServiceImpl implements MatchService {
         Player hostPlayer = new Player(userId, user.getUsername());
         hostPlayer.setReady(true);
         hostPlayer.setHealth(3);
+        hostPlayer.setShieldAvailable(true);
         match.getPlayers().add(hostPlayer);
 
         // 7. Save match to database
@@ -194,6 +200,7 @@ public class MatchServiceImpl implements MatchService {
         Player player = new Player(userId, authService.findById(userId).getUsername());
         player.setReady(false);
         player.setHealth(3);
+        player.setShieldAvailable(true);
         match.getPlayers().add(player);
         return matchRepository.save(match);
     }
@@ -216,6 +223,7 @@ public class MatchServiceImpl implements MatchService {
         match.setStatus("playing");
         match.setCurrentTurn(0);
         match.setTurnStartTime(Instant.now());
+        match.getPlayers().forEach(p -> p.setShieldAvailable(true));
         if (!match.getPlayers().isEmpty()) {
             String firstPlayerId = match.getPlayers().get(0).getUserId();
             match.setCurrentPlayerId(firstPlayerId);
@@ -244,8 +252,11 @@ public class MatchServiceImpl implements MatchService {
 
         Match.GameBoard targetBoard = getOrCreatePlayerBoard(match, opponent.getUserId());
         String coord = toCoordKey(x, y);
+        Set<String> bombSet = new HashSet<>(targetBoard.getBombs());
 
         String result = "safe";
+        List<RevealedCellResult> revealedCells = new ArrayList<>();
+        boolean shieldBlocked = false;
         if ("flag".equalsIgnoreCase(action)) {
             toggleFlag(targetBoard, coord);
             result = "flag";
@@ -253,10 +264,18 @@ public class MatchServiceImpl implements MatchService {
             if (targetBoard.getRevealed().contains(coord)) {
                 result = "safe";
             } else {
-                targetBoard.getRevealed().add(coord);
-                if (targetBoard.getBombs().contains(coord)) {
-                    result = "bomb";
-                    player.setHealth(Math.max(0, player.getHealth() - 1));
+                if (bombSet.contains(coord)) {
+                    targetBoard.getRevealed().add(coord);
+                    if (player.isShieldAvailable()) {
+                        shieldBlocked = true;
+                        player.setShieldAvailable(false);
+                        result = "shield_blocked";
+                    } else {
+                        result = "bomb";
+                        player.setHealth(Math.max(0, player.getHealth() - 1));
+                    }
+                } else {
+                    revealedCells = revealSafeCells(targetBoard, x, y, bombSet);
                 }
             }
         }
@@ -276,14 +295,14 @@ public class MatchServiceImpl implements MatchService {
         mr.setAction(action);
         mr.setResult(result);
         mr.setHealth(player.getHealth());
+        mr.setShieldBlocked(shieldBlocked);
+        mr.setShieldAvailable(player.isShieldAvailable());
+        mr.setRevealedCells(revealedCells);
 
         if (hasRevealedAllSafeCells(targetBoard)) {
             mr.setGameOver(true);
             mr.setWinnerId(userId);
-            match.setStatus("FINISHED");
-            match.setWinnerId(userId);
-            match.setFinishedAt(Instant.now());
-            matchRepository.save(match);
+            finalizeMatch(match, userId, mr);
             return mr;
         }
 
@@ -293,10 +312,7 @@ public class MatchServiceImpl implements MatchService {
                     .filter(p -> !p.getUserId().equals(userId))
                     .findFirst()
                     .map(Player::getUserId).orElse(null));
-            match.setStatus("FINISHED");
-            match.setWinnerId(mr.getWinnerId());
-            match.setFinishedAt(Instant.now());
-            matchRepository.save(match);
+                finalizeMatch(match, mr.getWinnerId(), mr);
         }
 
         return mr;
@@ -332,6 +348,154 @@ public class MatchServiceImpl implements MatchService {
             board.getFlags().remove(coord);
         } else {
             board.getFlags().add(coord);
+        }
+    }
+
+    private List<RevealedCellResult> revealSafeCells(Match.GameBoard board, int startX, int startY, Set<String> bombSet) {
+        List<RevealedCellResult> newlyRevealed = new ArrayList<>();
+
+        int width = board.getWidth() != null ? board.getWidth() : 10;
+        int height = board.getHeight() != null ? board.getHeight() : 10;
+
+        if (!isInsideBoard(startX, startY, width, height)) {
+            return newlyRevealed;
+        }
+
+        Set<String> visited = new HashSet<>();
+        Deque<int[]> queue = new ArrayDeque<>();
+        queue.offer(new int[] { startX, startY });
+
+        while (!queue.isEmpty()) {
+            int[] current = queue.poll();
+            int x = current[0];
+            int y = current[1];
+            String currentCoord = toCoordKey(x, y);
+
+            if (!visited.add(currentCoord)) {
+                continue;
+            }
+
+            if (!isInsideBoard(x, y, width, height)
+                    || bombSet.contains(currentCoord)
+                    || board.getRevealed().contains(currentCoord)
+                    || board.getFlags().contains(currentCoord)) {
+                continue;
+            }
+
+            int adjacentBombs = countAdjacentBombs(x, y, bombSet, width, height);
+            board.getRevealed().add(currentCoord);
+            newlyRevealed.add(new RevealedCellResult(x, y, adjacentBombs));
+
+            if (adjacentBombs != 0) {
+                continue;
+            }
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (dx == 0 && dy == 0) {
+                        continue;
+                    }
+                    int nx = x + dx;
+                    int ny = y + dy;
+                    if (isInsideBoard(nx, ny, width, height)) {
+                        queue.offer(new int[] { nx, ny });
+                    }
+                }
+            }
+        }
+
+        return newlyRevealed;
+    }
+
+    private int countAdjacentBombs(int x, int y, Set<String> bombSet, int width, int height) {
+        int count = 0;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                int nx = x + dx;
+                int ny = y + dy;
+                if (!isInsideBoard(nx, ny, width, height)) {
+                    continue;
+                }
+                if (bombSet.contains(toCoordKey(nx, ny))) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private boolean isInsideBoard(int x, int y, int width, int height) {
+        return x >= 0 && x < width && y >= 0 && y < height;
+    }
+
+    private void finalizeMatch(Match match, String winnerId, com.nhomgame.domain.match.dto.MoveResult moveResult) {
+        if (match == null || winnerId == null || winnerId.isBlank()) {
+            return;
+        }
+
+        String loserId = match.getPlayers().stream()
+                .map(Player::getUserId)
+                .filter(id -> id != null && !id.equals(winnerId))
+                .findFirst()
+                .orElse(null);
+
+        match.setStatus("FINISHED");
+        match.setWinnerId(winnerId);
+        match.setFinishedAt(Instant.now());
+        match.setUpdatedAt(Instant.now());
+        matchRepository.save(match);
+
+        applyEloDelta(winnerId, WINNER_ELO_DELTA);
+        if (loserId != null) {
+            applyEloDelta(loserId, LOSER_ELO_DELTA);
+        }
+        clearCurrentMatchForParticipants(match.getPlayers(), match.getId());
+
+        if (moveResult != null) {
+            moveResult.setWinnerEloDelta(WINNER_ELO_DELTA);
+            moveResult.setLoserEloDelta(LOSER_ELO_DELTA);
+        }
+    }
+
+    private void applyEloDelta(String userId, int delta) {
+        if (userId == null || userId.isBlank()) {
+            return;
+        }
+
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            return;
+        }
+
+        int nextRank = Math.max(0, user.getRank() + delta);
+        user.setRank(nextRank);
+        user.setModifiedAt(Instant.now());
+        userRepository.save(user);
+    }
+
+    private void clearCurrentMatchForParticipants(List<Match.Player> players, String matchId) {
+        if (players == null || matchId == null || matchId.isBlank()) {
+            return;
+        }
+
+        for (Match.Player participant : players) {
+            if (participant == null || participant.getUserId() == null || participant.getUserId().isBlank()) {
+                continue;
+            }
+
+            User user = userRepository.findById(participant.getUserId()).orElse(null);
+            if (user == null) {
+                continue;
+            }
+
+            if (matchId.equals(user.getCurrentMatchId())) {
+                user.setCurrentMatchId(null);
+                user.setModifiedAt(Instant.now());
+                userRepository.save(user);
+            }
         }
     }
 

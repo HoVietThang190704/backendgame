@@ -1,6 +1,7 @@
 package com.nhomgame.web.match;
 
 import java.security.Principal;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -10,11 +11,13 @@ import org.springframework.stereotype.Controller;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.nhomgame.domain.match.Match;
+import com.nhomgame.domain.match.Coordinate;
 import com.nhomgame.domain.match.dto.JoinRoomPayload;
 import com.nhomgame.domain.match.dto.SendMovePayload;
 import com.nhomgame.domain.match.dto.ToggleReadyPayload;
 import com.nhomgame.domain.match.dto.WsEvent;
 import com.nhomgame.service.auth.AuthService;
+import com.nhomgame.service.match.GameLogicService;
 import com.nhomgame.service.match.MatchService;
 
 @Controller
@@ -23,13 +26,16 @@ public class MatchWebSocketController {
     private final SimpMessagingTemplate template;
     private final MatchService matchService;
     private final AuthService authService;
+    private final GameLogicService gameLogicService;
 
     public MatchWebSocketController(SimpMessagingTemplate template,
                                     MatchService matchService,
-                                    AuthService authService) {
+                                    AuthService authService,
+                                    GameLogicService gameLogicService) {
         this.template = template;
         this.matchService = matchService;
         this.authService = authService;
+        this.gameLogicService = gameLogicService;
     }
 
     @MessageMapping("/join_room")
@@ -96,9 +102,31 @@ public class MatchWebSocketController {
         }
     }
 
+    @MessageMapping("/place_bombs")
+    @Transactional
+    public void placeBombs(@Payload BombSetupPayload payload, Principal principal) {
+        String userId = resolveUserId(principal, payload != null ? payload.getUserId() : null);
+        if (userId == null || payload == null || payload.getMatchId() == null || payload.getMatchId().isBlank()) {
+            return;
+        }
+
+        List<Coordinate> bombs = payload.getBombs() != null ? payload.getBombs() : List.of();
+        gameLogicService.placeBombs(payload.getMatchId(), userId, bombs);
+
+        Match updated = matchService.getMatchById(payload.getMatchId());
+        if (updated != null && "PLAYING".equalsIgnoreCase(updated.getStatus())) {
+            template.convertAndSend("/topic/match." + payload.getMatchId(),
+                    new WsEvent<>("start_game", new Object() {
+                        public final String matchId = payload.getMatchId();
+                        public final String currentTurn = updated.getCurrentPlayerId();
+                        public final Integer turnTimeLimit = updated.getTurnTimeLimit();
+                    }));
+        }
+    }
+
     @MessageMapping("/send_move")
     public void sendMove(@Payload SendMovePayload payload, Principal principal) {
-        String userId = resolveUserId(principal);
+        String userId = resolveUserId(principal, extractPayloadUserId(payload));
         if (userId == null) {
             return;
         }
@@ -119,13 +147,82 @@ public class MatchWebSocketController {
             return;
         }
         matchService.switchTurn(matchId);
+
+        Match switched = matchService.getMatchById(matchId);
+        if (switched != null) {
+            template.convertAndSend("/topic/match." + matchId,
+                    new WsEvent<>("turn_switched", new Object() {
+                        public final String currentTurn = switched.getCurrentPlayerId();
+                        public final Integer turnTimeLimit = switched.getTurnTimeLimit();
+                    }));
+        }
     }
 
-    private String resolveUserId(Principal principal) {
+    private String resolveUserId(Principal principal, String payloadUserId) {
         if (principal == null || principal.getName() == null || principal.getName().isBlank()) {
+            if (payloadUserId != null && !payloadUserId.isBlank()) {
+                return payloadUserId;
+            }
             return null;
         }
         var user = authService.findByEmail(principal.getName());
-        return user != null ? user.getId() : null;
+        if (user != null && user.getId() != null && !user.getId().isBlank()) {
+            return user.getId();
+        }
+        if (payloadUserId != null && !payloadUserId.isBlank()) {
+            return payloadUserId;
+        }
+        return null;
+    }
+
+    private String resolveUserId(Principal principal) {
+        return resolveUserId(principal, null);
+    }
+
+    private String extractPayloadUserId(SendMovePayload payload) {
+        if (payload == null) {
+            return null;
+        }
+
+        try {
+            Object value = payload.getClass().getMethod("getUserId").invoke(payload);
+            if (value instanceof String s && !s.isBlank()) {
+                return s;
+            }
+        } catch (Exception ignored) {
+            // Ignore and fallback to principal-based resolution.
+        }
+
+        return null;
+    }
+
+    public static class BombSetupPayload {
+        private String matchId;
+        private String userId;
+        private List<Coordinate> bombs;
+
+        public String getMatchId() {
+            return matchId;
+        }
+
+        public void setMatchId(String matchId) {
+            this.matchId = matchId;
+        }
+
+        public String getUserId() {
+            return userId;
+        }
+
+        public void setUserId(String userId) {
+            this.userId = userId;
+        }
+
+        public List<Coordinate> getBombs() {
+            return bombs;
+        }
+
+        public void setBombs(List<Coordinate> bombs) {
+            this.bombs = bombs;
+        }
     }
 }

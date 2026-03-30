@@ -1,9 +1,11 @@
 package com.nhomgame.web.match;
 
 import java.security.Principal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -65,6 +67,16 @@ public class MatchController {
         this.waitingQueueRepository = waitingQueueRepository;
         this.matchRepository = matchRepository;
         this.userRepository = userRepository;
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 1000)
+    public void reconcileWaitingQueueInWeb() {
+        try {
+            pairWaitingUsersIfPossible();
+            processTurnTimeouts();
+        } catch (Exception ex) {
+            log.error("Web-level queue reconciliation failed", ex);
+        }
     }
 
     /**
@@ -216,10 +228,10 @@ public class MatchController {
             return;
         }
 
-        Match match = new Match("public", firstUser.getId(), null);
+        Match match = new Match("public", firstUser.getId(), generatePublicMatchPin());
         match.setStatus("PREPARATION");
         match.setCurrentPlayerId(firstUser.getId());
-        match.setTurnTimeLimit(30);
+        match.setTurnTimeLimit(60);
         match.setCurrentTurn(0);
         match.setCreatedAt(java.time.Instant.now());
         match.setUpdatedAt(java.time.Instant.now());
@@ -257,6 +269,93 @@ public class MatchController {
         waitingQueueRepository.deleteById(secondQueue.getId());
 
         log.info("[WEB PAIRING] Matched users {} and {} into match {}", firstUser.getId(), secondUser.getId(), createdMatch.getId());
+    }
+
+    private void processTurnTimeouts() {
+        Instant now = Instant.now();
+
+        for (Match match : matchRepository.findAll()) {
+            if (match == null || !"PLAYING".equalsIgnoreCase(match.getStatus())) {
+                continue;
+            }
+
+            Integer timeLimit = match.getTurnTimeLimit();
+            Instant turnStart = match.getTurnStartTime();
+            if (timeLimit == null || timeLimit <= 0 || turnStart == null) {
+                continue;
+            }
+
+            if (turnStart.plusSeconds(timeLimit).isAfter(now)) {
+                continue;
+            }
+
+            applyTimeoutPenalty(match);
+        }
+    }
+
+    private void applyTimeoutPenalty(Match match) {
+        if (match.getCurrentPlayerId() == null || match.getCurrentPlayerId().isBlank() || match.getPlayers() == null) {
+            return;
+        }
+
+        Match.Player timedOutPlayer = match.getPlayers().stream()
+                .filter(p -> p != null && match.getCurrentPlayerId().equals(p.getUserId()))
+                .findFirst()
+                .orElse(null);
+
+        if (timedOutPlayer == null) {
+            return;
+        }
+
+        int nextHealth = Math.max(0, timedOutPlayer.getHealth() - 1);
+        timedOutPlayer.setHealth(nextHealth);
+        match.setUpdatedAt(Instant.now());
+
+        log.info("[TURN TIMEOUT] user {} in match {} loses 1 heart, remaining {}",
+                timedOutPlayer.getUserId(), match.getId(), nextHealth);
+
+        if (nextHealth == 0) {
+            String winnerId = match.getPlayers().stream()
+                    .filter(p -> p != null && p.getUserId() != null && !p.getUserId().equals(timedOutPlayer.getUserId()))
+                    .map(Match.Player::getUserId)
+                    .findFirst()
+                    .orElse(null);
+
+            match.setStatus("FINISHED");
+            match.setWinnerId(winnerId);
+            matchRepository.save(match);
+
+            messagingTemplate.convertAndSend(
+                    "/topic/match." + match.getId(),
+                    new WsEvent<>("game_over", new TimeoutGameOverPayload(timedOutPlayer.getUserId(), winnerId)));
+            return;
+        }
+
+        matchRepository.save(match);
+        matchService.switchTurn(match.getId());
+
+        Match switched = matchService.getMatchById(match.getId());
+        if (switched != null) {
+            messagingTemplate.convertAndSend(
+                    "/topic/match." + switched.getId(),
+                    new WsEvent<>("turn_timeout", new TurnTimeoutPayload(timedOutPlayer.getUserId(), nextHealth)));
+            messagingTemplate.convertAndSend(
+                    "/topic/match." + switched.getId(),
+                    new WsEvent<>("turn_switched", new TurnSwitchedPayload(switched.getCurrentPlayerId(), switched.getTurnTimeLimit())));
+        }
+    }
+
+    private String generatePublicMatchPin() {
+        final int maxAttempts = 10;
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            String pin = "PUB-" + UUID.randomUUID().toString().substring(0, 8);
+            if (!matchRepository.existsByPinCode(pin)) {
+                return pin;
+            }
+        }
+
+        throw new IllegalStateException("Unable to generate unique pin code for public match");
     }
 
     private User resolveEligibleUserForPairing(WaitingQueue queue) {
@@ -895,6 +994,93 @@ public class MatchController {
 
         public void setStatus(String status) {
             this.status = status;
+        }
+    }
+
+    public static class TurnSwitchedPayload {
+        private String currentTurn;
+        private Integer turnTimeLimit;
+
+        public TurnSwitchedPayload() {
+        }
+
+        public TurnSwitchedPayload(String currentTurn, Integer turnTimeLimit) {
+            this.currentTurn = currentTurn;
+            this.turnTimeLimit = turnTimeLimit;
+        }
+
+        public String getCurrentTurn() {
+            return currentTurn;
+        }
+
+        public void setCurrentTurn(String currentTurn) {
+            this.currentTurn = currentTurn;
+        }
+
+        public Integer getTurnTimeLimit() {
+            return turnTimeLimit;
+        }
+
+        public void setTurnTimeLimit(Integer turnTimeLimit) {
+            this.turnTimeLimit = turnTimeLimit;
+        }
+    }
+
+    public static class TurnTimeoutPayload {
+        private String userId;
+        private int health;
+
+        public TurnTimeoutPayload() {
+        }
+
+        public TurnTimeoutPayload(String userId, int health) {
+            this.userId = userId;
+            this.health = health;
+        }
+
+        public String getUserId() {
+            return userId;
+        }
+
+        public void setUserId(String userId) {
+            this.userId = userId;
+        }
+
+        public int getHealth() {
+            return health;
+        }
+
+        public void setHealth(int health) {
+            this.health = health;
+        }
+    }
+
+    public static class TimeoutGameOverPayload {
+        private String loserId;
+        private String winnerId;
+
+        public TimeoutGameOverPayload() {
+        }
+
+        public TimeoutGameOverPayload(String loserId, String winnerId) {
+            this.loserId = loserId;
+            this.winnerId = winnerId;
+        }
+
+        public String getLoserId() {
+            return loserId;
+        }
+
+        public void setLoserId(String loserId) {
+            this.loserId = loserId;
+        }
+
+        public String getWinnerId() {
+            return winnerId;
+        }
+
+        public void setWinnerId(String winnerId) {
+            this.winnerId = winnerId;
         }
     }
 

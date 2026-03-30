@@ -76,8 +76,7 @@ public class Match {
         private String username;
         private boolean ready;
         private int health;
-        private boolean alive;
-        private Instant joinedAt;
+        private boolean shieldAvailable = true;
 
         public Player(String userId, String username) {
             this.userId = userId;

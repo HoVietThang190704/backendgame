@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Service class for matchmaking logic, handling queue management and match creation.
@@ -70,6 +71,7 @@ public class MatchmakingService {
         // Create new Match
         Match match = new Match();
         match.setMatchType("public");
+        match.setPinCode(generatePublicMatchPin());
         match.setStatus("PREPARATION");
         match.setCreatedAt(Instant.now());
         match.setUpdatedAt(Instant.now());
@@ -106,5 +108,18 @@ public class MatchmakingService {
         gameBoard.setFlags(new ArrayList<>());
         gameBoard.setRevealed(new ArrayList<>());
         return gameBoard;
+    }
+
+    private String generatePublicMatchPin() {
+        final int maxAttempts = 10;
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            String pin = "PUB-" + UUID.randomUUID().toString().substring(0, 8);
+            if (!matchRepository.existsByPinCode(pin)) {
+                return pin;
+            }
+        }
+
+        throw new IllegalStateException("Unable to generate unique pin code for public match");
     }
 }

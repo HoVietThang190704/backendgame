@@ -98,18 +98,7 @@ public interface MatchService {
     void markPlayerDisconnected(String matchId, String userId);
 
     /**
-     * Player leaves match explicitly.
-     * 
-     * @return updated match instance, or null if match deleted
+     * Resolve current active match of a user, if any.
      */
-    Match leaveMatch(String matchId, String userId);
-
-    /**
-     * Get match result details
-     * 
-     * @param matchId Match ID
-     * @return MatchResultResponse with detailed result information
-     * @throws IllegalArgumentException if match not found or not finished
-     */
-    MatchResultResponse getMatchResult(String matchId);
+    Match getActiveMatchForUser(String userId);
 }

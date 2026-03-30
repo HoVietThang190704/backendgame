@@ -26,9 +26,11 @@ import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
 import com.nhomgame.domain.match.dto.MatchResultResponse;
 import com.nhomgame.domain.match.dto.MatchResultResponse.PlayerResultInfo;
+import com.nhomgame.domain.match.MatchHistory;
 import com.nhomgame.domain.match.dto.MatchHistoryDTO;
 import com.nhomgame.domain.match.dto.OpponentDTO;
 import com.nhomgame.infrastructure.auth.UserRepository;
+import com.nhomgame.infrastructure.match.MatchHistoryRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
 import com.nhomgame.infrastructure.match.WaitingQueueRepository;
 
@@ -41,6 +43,7 @@ public class MatchServiceImpl implements MatchService {
     private final WaitingQueueRepository waitingQueueRepository;
     private final MatchRepository matchRepository;
     private final UserRepository userRepository;
+    private final MatchHistoryRepository matchHistoryRepository;
     private final com.nhomgame.service.auth.AuthService authService;
     private final Random random = new Random();
     private static final List<String> ACTIVE_MATCH_STATUSES = List.of(
@@ -54,10 +57,12 @@ public class MatchServiceImpl implements MatchService {
     public MatchServiceImpl(WaitingQueueRepository waitingQueueRepository,
                           MatchRepository matchRepository,
                           UserRepository userRepository,
+                          MatchHistoryRepository matchHistoryRepository,
                           com.nhomgame.service.auth.AuthService authService) {
         this.waitingQueueRepository = waitingQueueRepository;
         this.matchRepository = matchRepository;
         this.userRepository = userRepository;
+        this.matchHistoryRepository = matchHistoryRepository;
         this.authService = authService;
     }
 
@@ -253,13 +258,6 @@ public class MatchServiceImpl implements MatchService {
     }
 
     @Override
-    public Match getActiveMatchForUser(String userId) {
-        java.util.List<String> activeStatuses = java.util.Arrays.asList("waiting", "PREPARATION", "playing");
-        java.util.List<Match> matches = matchRepository.findByPlayersContainingAndStatusIn(userId, activeStatuses);
-        return (matches != null && !matches.isEmpty()) ? matches.get(0) : null;
-    }
-
-    @Override
     public Match addPlayer(String matchId, String userId) {
         Match match = getMatchById(matchId);
         if (match == null) throw new IllegalArgumentException("Match not found");
@@ -371,7 +369,7 @@ public class MatchServiceImpl implements MatchService {
         if (hasRevealedAllSafeCells(targetBoard)) {
             mr.setGameOver(true);
             mr.setWinnerId(userId);
-            finalizeMatch(match, userId, mr);
+            finalizeMatch(match, userId, mr, "all_safe_revealed");
             return mr;
         }
 
@@ -381,7 +379,7 @@ public class MatchServiceImpl implements MatchService {
                     .filter(p -> !p.getUserId().equals(userId))
                     .findFirst()
                     .map(Player::getUserId).orElse(null));
-                finalizeMatch(match, mr.getWinnerId(), mr);
+                finalizeMatch(match, mr.getWinnerId(), mr, "health_exhausted");
         }
 
         return mr;
@@ -500,8 +498,8 @@ public class MatchServiceImpl implements MatchService {
         return x >= 0 && x < width && y >= 0 && y < height;
     }
 
-    private void finalizeMatch(Match match, String winnerId, com.nhomgame.domain.match.dto.MoveResult moveResult) {
-        if (match == null || winnerId == null || winnerId.isBlank()) {
+    private void finalizeMatch(Match match, String winnerId, com.nhomgame.domain.match.dto.MoveResult moveResult, String endReason) {
+        if (match == null || "FINISHED".equals(match.getStatus())) {
             return;
         }
 
@@ -521,11 +519,88 @@ public class MatchServiceImpl implements MatchService {
         if (loserId != null) {
             applyEloDelta(loserId, LOSER_ELO_DELTA);
         }
+        
+        // Record match history before clearing current match
+        recordMatchHistory(match, endReason);
+        
         clearCurrentMatchForParticipants(match.getPlayers(), match.getId());
 
         if (moveResult != null) {
             moveResult.setWinnerEloDelta(WINNER_ELO_DELTA);
             moveResult.setLoserEloDelta(LOSER_ELO_DELTA);
+        }
+    }
+
+    private void recordMatchHistory(Match match, String endReason) {
+        try {
+            long duration = 0;
+            if (match.getStartedAt() != null && match.getFinishedAt() != null) {
+                duration = ChronoUnit.SECONDS.between(match.getStartedAt(), match.getFinishedAt());
+            }
+
+            List<MatchHistory.PlayerHistoryStats> playerStatsList = new ArrayList<>();
+            for (Match.Player player : match.getPlayers()) {
+                String userId = player.getUserId();
+                String result = "draw";
+                if (match.getWinnerId() != null) {
+                    result = match.getWinnerId().equals(userId) ? "win" : "lose";
+                }
+
+                Match.GameBoard board = getOrCreatePlayerBoard(match, userId);
+                
+                // Calculate stats
+                // bombsPlaced: How many bombs this player placed on OPPONENT'S board.
+                String opponentId = match.getPlayers().stream()
+                        .map(Match.Player::getUserId)
+                        .filter(id -> id != null && !id.equals(userId))
+                        .findFirst().orElse(null);
+                
+                int bombsPlaced = 0;
+                int bombsFound = 0;
+                if (opponentId != null) {
+                    Match.GameBoard opponentBoard = getOrCreatePlayerBoard(match, opponentId);
+                    bombsPlaced = opponentBoard.getBombs() != null ? opponentBoard.getBombs().size() : 0;
+                    // bombsFound: safe cells user revealed on opponent's board.
+                    bombsFound = opponentBoard.getRevealed() != null ? opponentBoard.getRevealed().size() : 0;
+                }
+
+                int flagsPlaced = board.getFlags() != null ? board.getFlags().size() : 0;
+                int turnsPlayed = (int) match.getMoves().stream()
+                        .filter(m -> m.getPlayerId() != null && m.getPlayerId().equals(userId))
+                        .count();
+
+                MatchHistory.GameStats gameStats = MatchHistory.GameStats.builder()
+                        .bombsPlaced(bombsPlaced)
+                        .bombsFound(bombsFound)
+                        .flagsPlaced(flagsPlaced)
+                        .turnsPlayed(turnsPlayed)
+                        .build();
+
+                User user = userRepository.findById(userId).orElse(null);
+                String username = user != null ? user.getUsername() : "Unknown";
+
+                playerStatsList.add(MatchHistory.PlayerHistoryStats.builder()
+                        .userId(userId)
+                        .username(username)
+                        .result(result)
+                        .finalHealth(player.getHealth())
+                        .stats(gameStats)
+                        .build());
+            }
+
+            MatchHistory history = MatchHistory.builder()
+                    .matchId(match.getId())
+                    .players(playerStatsList)
+                    .matchType("PVP")
+                    .duration(duration)
+                    .endReason(endReason)
+                    .playedAt(match.getFinishedAt() != null ? match.getFinishedAt() : Instant.now())
+                    .build();
+
+            matchHistoryRepository.save(history);
+            log.info("Saved match history for match {}", match.getId());
+        } catch (Exception e) {
+            log.error("Failed to save match history for match {}: {}", match.getId(), e.getMessage());
         }
     }
 

@@ -77,10 +77,13 @@ public class Match {
         private boolean ready;
         private int health;
         private boolean shieldAvailable = true;
+        private boolean alive = true;
+        private Instant joinedAt;
 
         public Player(String userId, String username) {
             this.userId = userId;
             this.username = username;
+            this.joinedAt = Instant.now();
         }
     }
 

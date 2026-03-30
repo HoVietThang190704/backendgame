@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import com.nhomgame.domain.auth.User;
@@ -22,6 +24,10 @@ import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.WaitingQueue.Preferences;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchResultResponse;
+import com.nhomgame.domain.match.dto.MatchResultResponse.PlayerResultInfo;
+import com.nhomgame.domain.match.dto.MatchHistoryDTO;
+import com.nhomgame.domain.match.dto.OpponentDTO;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
 import com.nhomgame.infrastructure.match.WaitingQueueRepository;
@@ -53,6 +59,62 @@ public class MatchServiceImpl implements MatchService {
         this.matchRepository = matchRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+    }
+
+    @Override
+    public Page<MatchHistoryDTO> getMatchHistory(String userId, Pageable pageable) {
+        log.info("Fetching match history for user {}", userId);
+        
+        java.util.List<String> finishedStatuses = java.util.Arrays.asList("finished", "FINISHED");
+        Page<Match> matches = matchRepository.findByPlayersUserIdAndStatusIn(userId, finishedStatuses, pageable);
+        
+        return matches.map(match -> mapToMatchHistoryDTO(match, userId));
+    }
+
+    private MatchHistoryDTO mapToMatchHistoryDTO(Match match, String userId) {
+        String result = "draw";
+        int eloChange = 0;
+        
+        if (match.getWinnerId() != null) {
+            if (match.getWinnerId().equals(userId)) {
+                result = "win";
+                eloChange = 25;
+            } else {
+                result = "lose";
+                eloChange = -20;
+            }
+        }
+        
+        long duration = 0;
+        if (match.getStartedAt() != null && match.getFinishedAt() != null) {
+            duration = java.time.Duration.between(match.getStartedAt(), match.getFinishedAt()).getSeconds();
+        }
+        
+        String opponentId = match.getPlayers().stream()
+                .map(Player::getUserId)
+                .filter(id -> id != null && !id.equals(userId))
+                .findFirst()
+                .orElse(null);
+                
+        OpponentDTO opponentDTO = new OpponentDTO("Unknown", "");
+        if (opponentId != null) {
+            User opponent = userRepository.findById(opponentId).orElse(null);
+            if (opponent != null) {
+                String displayName = (opponent.getName() != null && !opponent.getName().isBlank()) 
+                    ? opponent.getName() : opponent.getUsername();
+                opponentDTO = new OpponentDTO(displayName, opponent.getAvatarUrl());
+            }
+        }
+        
+        return MatchHistoryDTO.builder()
+                .matchId(match.getId())
+                .matchType(match.getMatchType())
+                .result(result)
+                .opponent(opponentDTO)
+                .duration(duration)
+                .eloChange(eloChange)
+                .playedAt(match.getFinishedAt() != null ? match.getFinishedAt() : match.getCreatedAt())
+                .build();
     }
 
     @Override
@@ -188,6 +250,13 @@ public class MatchServiceImpl implements MatchService {
     @Override
     public Match getMatchByPin(String pinCode) {
         return matchRepository.findByPinCode(pinCode).orElse(null);
+    }
+
+    @Override
+    public Match getActiveMatchForUser(String userId) {
+        java.util.List<String> activeStatuses = java.util.Arrays.asList("waiting", "PREPARATION", "playing");
+        java.util.List<Match> matches = matchRepository.findByPlayersContainingAndStatusIn(userId, activeStatuses);
+        return (matches != null && !matches.isEmpty()) ? matches.get(0) : null;
     }
 
     @Override
@@ -539,14 +608,143 @@ public class MatchServiceImpl implements MatchService {
 
     @Override
     public void markPlayerDisconnected(String matchId, String userId) {
-        Match match = getMatchById(matchId);
-        if (match == null) return;
-
-        match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
-        if (match.getPlayers().isEmpty()) {
-            match.setStatus("cancelled");
+        try {
+            leaveMatch(matchId, userId);
+        } catch (Exception ex) {
+            log.warn("Error disconnecting player {} from match {}: {}", userId, matchId, ex.getMessage());
         }
-        matchRepository.save(match);
+    }
+
+    @Override
+    public Match leaveMatch(String matchId, String userId) {
+        Match match = getMatchById(matchId);
+
+        // If match is already deleted from DB, still clear user state
+        if (match == null) {
+            log.warn("leaveMatch: match {} not found, clearing currentMatchId for user {}", matchId, userId);
+            var staleUser = authService.findById(userId);
+            if (staleUser != null && staleUser.getCurrentMatchId() != null && staleUser.getCurrentMatchId().equals(matchId)) {
+                staleUser.setCurrentMatchId(null);
+                authService.saveUser(staleUser);
+            }
+            return null;
+        }
+
+        boolean removed = match.getPlayers().removeIf(p -> p.getUserId().equals(userId));
+        if (!removed) {
+            throw new IllegalArgumentException("User is not part of this match");
+        }
+
+        // Clean board for leaving player
+        if (match.getGameBoard() != null) {
+            match.getGameBoard().remove(userId);
+        }
+
+        // Handle host transfer / room cleanup
+        if (match.getHostId() != null && match.getHostId().equals(userId)) {
+            if (match.getPlayers().isEmpty()) {
+                matchRepository.delete(match);
+                log.info("Host {} left and match {} had no players; deleted", userId, matchId);
+                // reset leaving user in AuthService
+                var leavingUser = authService.findById(userId);
+                if (leavingUser != null) {
+                    leavingUser.setCurrentMatchId(null);
+                    authService.saveUser(leavingUser);
+                }
+                return null;
+            } else {
+                Match.Player newHost = match.getPlayers().get(0);
+                match.setHostId(newHost.getUserId());
+                log.info("Host {} left match {}. New host {}", userId, matchId, newHost.getUserId());
+            }
+        }
+
+        // If no players remain, delete match
+        if (match.getPlayers().isEmpty()) {
+            matchRepository.delete(match);
+            log.info("Match {} emptied after {} leaving and was deleted", matchId, userId);
+        } else {
+            // Adjust current player if needed
+            if (match.getCurrentPlayerId() != null && match.getCurrentPlayerId().equals(userId)) {
+                String newCurrent = match.getPlayers().get(0).getUserId();
+                match.setCurrentPlayerId(newCurrent);
+                match.setCurrentTurn(0);
+            }
+
+            // If only one player remains, move to waiting status
+            if (match.getPlayers().size() < 2 && "playing".equalsIgnoreCase(match.getStatus())) {
+                match.setStatus("waiting");
+            }
+
+            match.setUpdatedAt(Instant.now());
+            matchRepository.save(match);
+        }
+
+        // Clear user currentMatchId
+        var leavingUser2 = authService.findById(userId);
+        if (leavingUser2 != null) {
+            leavingUser2.setCurrentMatchId(null);
+            authService.saveUser(leavingUser2);
+        }
+
+        return match;
+    }
+
+    @Override
+    public Match joinMatchWithPin(String userId, String username, String pinCode) {
+        // 1. Tìm trận đấu có pinCode tương ứng
+        Match match = matchRepository.findByPinCode(pinCode)
+                .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy phòng chờ với mã PIN này."));
+
+        // Kiểm tra status = "waiting"
+        if (!"waiting".equals(match.getStatus())) {
+            throw new IllegalArgumentException("Phòng này không ở trạng thái chờ");
+        }
+
+        // 2. Kiểm tra số lượng người chơi hiện tại, nếu đã đủ 2 người thì báo lỗi "Room Full"
+        if (match.getPlayers() != null && match.getPlayers().size() >= 2) {
+            throw new IllegalArgumentException("Room Full");
+        }
+
+        // Kiểm tra xem user có lỡ tự join lại phòng của chính mình không
+        boolean alreadyInRoom = match.getPlayers().stream()
+                .anyMatch(p -> p.getUserId().equals(userId));
+        if (alreadyInRoom) {
+            throw new IllegalArgumentException("Bạn đã ở trong phòng này rồi.");
+        }
+
+        // 3. Thêm người chơi mới vào mảng players với playerNumber: 2 và isReady: false
+        Match.Player player2 = new Match.Player(userId, username);
+        player2.setReady(false);
+        player2.setHealth(3);
+        player2.setAlive(true);
+        player2.setJoinedAt(Instant.now());
+
+        match.getPlayers().add(player2);
+
+        // 4. Nếu đủ 2 người, tự động update match status từ "waiting" -> "ready"
+        // Khi đủ 2 người, match chuyển sang trạng thái "ready" (chờ cả 2 ready để play)
+        if (match.getPlayers().size() >= 2) {
+            match.setStatus("ready");
+            match.setUpdatedAt(Instant.now());
+            log.info("Match {} now has 2 players, status changed to 'ready'", match.getId());
+        }
+
+        // Lưu bản ghi Match đã cập nhật vào DB
+        Match savedMatch = matchRepository.save(match);
+
+        // 5. Cập nhật currentMatchId cho người chơi vừa tham gia
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null) {
+            user.setCurrentMatchId(savedMatch.getId());
+            userRepository.save(user);
+        }
+
+        // 6. Yêu cầu Real-time: Sẽ được handle bởi MatchWebSocketController
+        // (Socket notification sẽ được gửi thông qua /topic/match.{matchId})
+        log.info("User {} joined match {} successfully", userId, savedMatch.getId());
+
+        return savedMatch;
     }
 
     @Override
@@ -633,4 +831,120 @@ public class MatchServiceImpl implements MatchService {
 
         return pinCode;
     }
+
+    @Override
+    public MatchResultResponse getMatchResult(String matchId) {
+        // Try to find match from 'matches' collection first
+        Match match = matchRepository.findById(matchId).orElse(null);
+
+        // If not found or not finished, attempt to query from matchHistory
+        // (In a future implementation, we would query a separate matchHistory collection)
+        if (match == null || !"finished".equals(match.getStatus())) {
+            throw new IllegalArgumentException("Match not found or match is not finished");
+        }
+
+        // Build player result list
+        java.util.List<PlayerResultInfo> playerResults = new java.util.ArrayList<>();
+
+        String winnerUsername = null;
+        int totalMoveCount = (match.getMoves() != null) ? match.getMoves().size() : 0;
+
+        // Get winner information
+        if (match.getWinnerId() != null) {
+            User winner = userRepository.findById(match.getWinnerId()).orElse(null);
+            if (winner != null) {
+                winnerUsername = winner.getUsername();
+            }
+        }
+
+        // Process each player
+        for (Player player : match.getPlayers()) {
+            String userId = player.getUserId();
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null) continue;
+
+            // Calculate ELO changes using simple ELO formula
+            boolean isWinner = match.getWinnerId() != null && match.getWinnerId().equals(userId);
+            int rankBefore = user.getRank();
+            int rankChange = calculateEloChange(rankBefore, isWinner, match.getPlayers().size());
+            int rankAfter = rankBefore + rankChange;
+
+            // Count mine hits for this player
+            int mineHits = countMineHitsForPlayer(match, userId);
+
+            PlayerResultInfo playerInfo = new PlayerResultInfo(
+                userId,
+                user.getUsername(),
+                player.getHealth(),
+                mineHits,
+                player.isAlive(),
+                rankBefore,
+                rankAfter,
+                isWinner
+            );
+
+            playerResults.add(playerInfo);
+        }
+
+        // Create and return result response
+        MatchResultResponse response = new MatchResultResponse(
+            matchId,
+            match.getStatus(),
+            match.getStartedAt(),
+            match.getFinishedAt(),
+            totalMoveCount,
+            match.getWinnerId(),
+            winnerUsername,
+            playerResults
+        );
+
+        log.info("Match result retrieved for match {}: winner={}, totalMoves={}, players={}", 
+                matchId, match.getWinnerId(), totalMoveCount, playerResults.size());
+
+        return response;
+    }
+
+    /**
+     * Calculate ELO change based on win/loss and players count
+     * Simplified ELO calculation: +30 for win, -20 for loss (can be adjusted)
+     */
+    private int calculateEloChange(int currentRank, boolean won, int playersCount) {
+        // Base ELO change values
+        int winPoints = 30;
+        int lossPoints = -20;
+
+        // Adjust for number of players if needed
+        if (playersCount > 2) {
+            winPoints = (winPoints * 2) / playersCount;
+            lossPoints = (lossPoints * 2) / playersCount;
+        }
+
+        return won ? winPoints : lossPoints;
+    }
+
+    /**
+     * Count the number of mines hit by a specific player
+     * A mine hit is counted when action="open" and result="bomb"
+     */
+    private int countMineHitsForPlayer(Match match, String playerId) {
+        if (match.getMoves() == null) {
+            return 0;
+        }
+
+        // Count moves where playerId hit a mine
+        // Note: This requires tracking move results in the Move object
+        // For now, we count based on health loss (3 - current health)
+        Player player = match.getPlayers().stream()
+                .filter(p -> p.getUserId().equals(playerId))
+                .findFirst()
+                .orElse(null);
+
+        if (player == null) {
+            return 0;
+        }
+
+        // Calculate mine hits as initial health (3) minus current health
+        return Math.max(0, 3 - player.getHealth());
+    }
+
 }

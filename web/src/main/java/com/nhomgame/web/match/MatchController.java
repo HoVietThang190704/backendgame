@@ -9,19 +9,24 @@ import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import com.nhomgame.domain.auth.User;
 import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchHistoryDTO;
 import com.nhomgame.domain.match.dto.WsEvent;
 import com.nhomgame.infrastructure.auth.UserRepository;
 import com.nhomgame.infrastructure.match.MatchRepository;
@@ -49,17 +54,12 @@ public class MatchController {
     private final MatchRepository matchRepository;
     private final UserRepository userRepository;
 
-    private static final List<String> ACTIVE_MATCH_STATUSES = List.of("waiting", "PREPARATION", "PLAYING");
-
+    private static final java.util.Set<String> ACTIVE_MATCH_STATUSES = java.util.Set.of("waiting", "PREPARATION", "playing");
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchController.class);
 
-    public MatchController(MatchService matchService,
-                           AuthService authService,
-                           MatchmakingService matchmakingService,
-                           SimpMessagingTemplate messagingTemplate,
-                           WaitingQueueRepository waitingQueueRepository,
-                           MatchRepository matchRepository,
-                           UserRepository userRepository) {
+    public MatchController(MatchService matchService, AuthService authService, MatchmakingService matchmakingService,
+                           SimpMessagingTemplate messagingTemplate, WaitingQueueRepository waitingQueueRepository,
+                           MatchRepository matchRepository, UserRepository userRepository) {
         this.matchService = matchService;
         this.authService = authService;
         this.matchmakingService = matchmakingService;
@@ -80,12 +80,16 @@ public class MatchController {
     }
 
     /**
-     * GET /api/match/active
-     *
-     * Get active match of current user (if any)
+     * GET /api/match-history
+     * 
+     * Retrieve paginated match history for authenticated user
      */
-    @GetMapping("/api/match/active")
-    public ResponseEntity<ApiResponse<ActiveMatchResponse>> getActiveMatch(Principal principal) {
+    @GetMapping("/api/match-history")
+    public ResponseEntity<ApiResponse<Page<MatchHistoryDTO>>> getMatchHistory(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            Principal principal) {
+            
         if (principal == null || principal.getName() == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(new ApiResponse<>(401, false, "Unauthorized", null));
@@ -98,16 +102,14 @@ public class MatchController {
                     .body(new ApiResponse<>(404, false, "User not found", null));
         }
 
-        Match activeMatch = matchService.getActiveMatchForUser(user.getId());
-        if (activeMatch == null) {
-            return ResponseEntity.ok(new ApiResponse<>(200, true, "No active match", null));
+        try {
+            Page<MatchHistoryDTO> history = matchService.getMatchHistory(user.getId(), PageRequest.of(page, size));
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Match history fetched", history));
+        } catch (Exception ex) {
+            log.error("Error fetching match history for user {}", user.getId(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
-
-        return ResponseEntity.ok(new ApiResponse<>(
-                200,
-                true,
-                "Active match found",
-                new ActiveMatchResponse(activeMatch)));
     }
 
     /**
@@ -466,6 +468,84 @@ public class MatchController {
     }
 
     /**
+     * POST /api/matches/join
+     *
+     * Join a private room by pin code
+     * Request body: { "pinCode": "4198" }
+     */
+    @PostMapping("/api/matches/join")
+    public ResponseEntity<ApiResponse<CreateMatchResponse>> joinMatchByPin(
+            @RequestBody JoinMatchByPinRequest request,
+            Principal principal) {
+
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        if (request == null || request.getPinCode() == null || request.getPinCode().isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, "Pin code is required", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        String userId = user.getId();
+
+        try {
+            Match match = matchService.getMatchByPin(request.getPinCode());
+            if (match == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(new ApiResponse<>(404, false, "Match not found", null));
+            }
+
+            if (user.getCurrentMatchId() != null && !user.getCurrentMatchId().isEmpty() && !user.getCurrentMatchId().equals(match.getId())) {
+                // If user has stale currentMatchId, clear it and continue.
+                Match activeMatch = matchService.getMatchById(user.getCurrentMatchId());
+                if (activeMatch == null || !("waiting".equalsIgnoreCase(activeMatch.getStatus()) || "playing".equalsIgnoreCase(activeMatch.getStatus()))) {
+                    user.setCurrentMatchId(null);
+                    user.setModifiedAt(java.time.Instant.now());
+                    authService.saveUser(user);
+                } else {
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(new ApiResponse<>(400, false, "User is already in an active match", null));
+                }
+            }
+
+            if (match.getPlayers().stream().anyMatch(p -> p.getUserId().equals(userId))) {
+                // already in room
+            } else if (match.getPlayers().size() >= 2) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(new ApiResponse<>(400, false, "Match is full", null));
+            } else {
+                matchService.addPlayer(match.getId(), userId);
+            }
+
+            // update user currentMatchId for join success (or rejoin existing room)
+            user.setCurrentMatchId(match.getId());
+            user.setModifiedAt(java.time.Instant.now());
+            authService.saveUser(user);
+
+            CreateMatchResponse response = new CreateMatchResponse(matchService.getMatchById(match.getId()));
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Joined match successfully", response));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid join match request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in joinMatchByPin", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
+    }
+
+    /**
      * POST /api/match/join
      *
      * Join the matchmaking queue for finding an opponent
@@ -558,13 +638,33 @@ public class MatchController {
                     .body(new ApiResponse<>(404, false, "Match not found", null));
         }
 
+        // Authorization: only match members can query match state
+        boolean isMember = match.getPlayers().stream()
+                .anyMatch(p -> p.getUserId().equals(currentUser.getId()));
+        if (!isMember && !match.getHostId().equals(currentUser.getId())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(new ApiResponse<>(403, false, "Forbidden: user not in this match", null));
+        }
+
         try {
             List<PlayerState> players = new ArrayList<>();
+            int idx = 0;
             for (Match.Player player : match.getPlayers()) {
+                idx++;
                 User u = authService.findById(player.getUserId());
-                String displayName = u != null && u.getName() != null && !u.getName().isBlank() ? u.getName() : player.getUsername();
-                int rank = u != null ? u.getRank() : 0;
-                players.add(new PlayerState(player.getUserId(), displayName, rank, player.getHealth()));
+                String displayName = (u != null && u.getName() != null && !u.getName().isBlank()) ? u.getName() : player.getUsername();
+                String avatar = (u != null && u.getAvatarUrl() != null) ? u.getAvatarUrl() : "";
+                int rank = (u != null) ? u.getRank() : 0;
+
+                PlayerState playerState = new PlayerState();
+                playerState.setUserId(player.getUserId());
+                playerState.setDisplayName(displayName);
+                playerState.setAvatar(avatar);
+                playerState.setRank(rank);
+                playerState.setHealth(player.getHealth());
+                playerState.setIsReady(player.isReady());
+                playerState.setPlayerNumber(idx);
+                players.add(playerState);
             }
 
             String player1Id = match.getPlayers().size() > 0 ? match.getPlayers().get(0).getUserId() : null;
@@ -602,6 +702,10 @@ public class MatchController {
             BoardState boardState = new BoardState(player1Revealed, player2Revealed, player1Flags, player2Flags);
 
             MatchStateResponse response = new MatchStateResponse(
+                    match.getId(),
+                    match.getPinCode(),
+                    match.getStatus(),
+                    match.getGameBoard(),
                     players,
                     boardState,
                     match.getCurrentTurn(),
@@ -612,6 +716,54 @@ public class MatchController {
 
         } catch (Exception ex) {
             log.error("Unexpected error in getMatchState", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
+        }
+    }
+
+    /**
+     * DELETE /api/matches/{id}/leave
+     *
+     * User leaves a match explicitly.
+     */
+    @DeleteMapping("/api/matches/{id}/leave")
+    public ResponseEntity<ApiResponse<Void>> leaveMatch(
+            @PathVariable("id") String matchId,
+            Principal principal) {
+
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        String userId = user.getId();
+        log.info("Leave match request from user {} ({}) on match {}", userId, email, matchId);
+
+        try {
+            Match result = matchService.leaveMatch(matchId, userId);
+
+            // Notify remaining players via websocket
+            messagingTemplate.convertAndSend("/topic/match." + matchId,
+                    new WsEvent<>("player_left", userId));
+
+            if (result == null) {
+                return ResponseEntity.ok(new ApiResponse<>(200, true, "Left match and match deleted", null));
+            }
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Left match successfully", null));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid leave match request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in leaveMatch", ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
@@ -1063,7 +1215,26 @@ public class MatchController {
         }
     }
 
+    public static class JoinMatchByPinRequest {
+        private String pinCode;
+
+        public JoinMatchByPinRequest() {
+        }
+
+        public String getPinCode() {
+            return pinCode;
+        }
+
+        public void setPinCode(String pinCode) {
+            this.pinCode = pinCode;
+        }
+    }
+
     public static class MatchStateResponse {
+        private String matchId;
+        private String pinCode;
+        private String status;
+        private java.util.Map<String, Match.GameBoard> gameBoard;
         private List<PlayerState> players;
         private BoardState boardState;
         private int currentTurn;
@@ -1073,7 +1244,13 @@ public class MatchController {
         public MatchStateResponse() {
         }
 
-        public MatchStateResponse(List<PlayerState> players, BoardState boardState, int currentTurn, java.time.Instant turnStartTime, int turnTimeLimit) {
+        public MatchStateResponse(String matchId, String pinCode, String status, java.util.Map<String, Match.GameBoard> gameBoard,
+                                  List<PlayerState> players, BoardState boardState, int currentTurn,
+                                  java.time.Instant turnStartTime, int turnTimeLimit) {
+            this.matchId = matchId;
+            this.pinCode = pinCode;
+            this.status = status;
+            this.gameBoard = gameBoard;
             this.players = players;
             this.boardState = boardState;
             this.currentTurn = currentTurn;
@@ -1120,21 +1297,59 @@ public class MatchController {
         public void setTurnTimeLimit(int turnTimeLimit) {
             this.turnTimeLimit = turnTimeLimit;
         }
+
+        public String getMatchId() {
+            return matchId;
+        }
+
+        public void setMatchId(String matchId) {
+            this.matchId = matchId;
+        }
+
+        public String getPinCode() {
+            return pinCode;
+        }
+
+        public void setPinCode(String pinCode) {
+            this.pinCode = pinCode;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public java.util.Map<String, Match.GameBoard> getGameBoard() {
+            return gameBoard;
+        }
+
+        public void setGameBoard(java.util.Map<String, Match.GameBoard> gameBoard) {
+            this.gameBoard = gameBoard;
+        }
     }
 
     public static class PlayerState {
         private String userId;
         private String displayName;
+        private String avatar;
         private int rank;
+        private boolean isReady;
+        private int playerNumber;
         private int health;
 
         public PlayerState() {
         }
 
-        public PlayerState(String userId, String displayName, int rank, int health) {
+        public PlayerState(String userId, String displayName, String avatar, int rank, boolean isReady, int playerNumber, int health) {
             this.userId = userId;
             this.displayName = displayName;
+            this.avatar = avatar;
             this.rank = rank;
+            this.isReady = isReady;
+            this.playerNumber = playerNumber;
             this.health = health;
         }
 
@@ -1152,6 +1367,30 @@ public class MatchController {
 
         public void setDisplayName(String displayName) {
             this.displayName = displayName;
+        }
+
+        public String getAvatar() {
+            return avatar;
+        }
+
+        public void setAvatar(String avatar) {
+            this.avatar = avatar;
+        }
+
+        public boolean isReady() {
+            return isReady;
+        }
+
+        public void setIsReady(boolean isReady) {
+            this.isReady = isReady;
+        }
+
+        public int getPlayerNumber() {
+            return playerNumber;
+        }
+
+        public void setPlayerNumber(int playerNumber) {
+            this.playerNumber = playerNumber;
         }
 
         public int getRank() {
@@ -1246,6 +1485,52 @@ public class MatchController {
 
         public void setY(int y) {
             this.y = y;
+        }
+    }
+
+    /**
+     * GET /api/matches/{id}/result
+     *
+     * Retrieve match result details after match is finished
+     * 
+     * Returns: MatchResultResponse with:
+     * - Match duration in seconds
+     * - Total number of moves
+     * - Player information (health, mines hit, rank changes)
+     * - Winner information
+     */
+    @org.springframework.web.bind.annotation.GetMapping("/api/matches/{id}/result")
+    public ResponseEntity<ApiResponse<com.nhomgame.domain.match.dto.MatchResultResponse>> getMatchResult(
+            @org.springframework.web.bind.annotation.PathVariable("id") String matchId,
+            Principal principal) {
+
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User currentUser = authService.findByEmail(email);
+        if (currentUser == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        try {
+            com.nhomgame.domain.match.dto.MatchResultResponse result = matchService.getMatchResult(matchId);
+            
+            log.info("Match result retrieved for match {} by user {}", matchId, currentUser.getId());
+            
+            return ResponseEntity.ok(new ApiResponse<>(200, true, "Match result retrieved successfully", result));
+
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid match result request: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(400, false, ex.getMessage(), null));
+        } catch (Exception ex) {
+            log.error("Unexpected error in getMatchResult", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(500, false, "Internal server error", null));
         }
     }
 }

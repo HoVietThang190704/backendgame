@@ -1,15 +1,25 @@
 package com.nhomgame.service.match;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 import com.nhomgame.domain.match.Match;
 import com.nhomgame.domain.match.WaitingQueue;
 import com.nhomgame.domain.match.dto.CreateMatchRequest;
 import com.nhomgame.domain.match.dto.MatchFindRequest;
+import com.nhomgame.domain.match.dto.MatchResultResponse;
+import com.nhomgame.domain.match.dto.MatchHistoryDTO;
 import com.nhomgame.domain.match.dto.MoveResult;
 
 /**
  * Service interface for match operations
  */
 public interface MatchService {
+
+    /**
+     * Get paginated match history for user
+     */
+    Page<MatchHistoryDTO> getMatchHistory(String userId, Pageable pageable);
     /**
      * Add user to waiting queue to find a match
      * 
@@ -51,6 +61,11 @@ public interface MatchService {
     Match getMatchByPin(String pinCode);
 
     /**
+     * Get active match (waiting/preparation/playing) for user
+     */
+    Match getActiveMatchForUser(String userId);
+
+    /**
      * Add player to a match
      */
     Match addPlayer(String matchId, String userId);
@@ -65,6 +80,8 @@ public interface MatchService {
      */
     Match startMatch(String matchId);
 
+    Match joinMatchWithPin(String userId, String username, String pinCode);
+    
     /**
      * Apply a move
      */

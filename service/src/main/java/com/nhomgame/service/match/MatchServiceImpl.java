@@ -47,7 +47,7 @@ public class MatchServiceImpl implements MatchService {
     private final com.nhomgame.service.auth.AuthService authService;
     private final Random random = new Random();
     private static final List<String> ACTIVE_MATCH_STATUSES = List.of(
-            "waiting", "WAITING", "PREPARATION", "PLAYING", "playing");
+            "waiting", "WAITING", "ready", "READY", "PREPARATION", "PLAYING", "playing");
     private static final long STALE_PREPARATION_TIMEOUT_MINUTES = 10;
         private static final int WINNER_ELO_DELTA = 20;
         private static final int LOSER_ELO_DELTA = -10;
@@ -137,7 +137,13 @@ public class MatchServiceImpl implements MatchService {
         // 2. Resolve active match from DB and clear stale currentMatchId if needed
         Match activeMatch = getActiveMatchForUser(userId);
         if (activeMatch != null) {
-            throw new IllegalArgumentException("User is already in an active match");
+            // Self-healing: if match is not actually playing, allow user to "leave" and start new search
+            if (!"playing".equalsIgnoreCase(activeMatch.getStatus())) {
+                log.info("User {} is in a non-playing match {}, auto-leaving to allow new search", userId, activeMatch.getId());
+                leaveMatch(activeMatch.getId(), userId);
+            } else {
+                throw new IllegalArgumentException("User is already in an active match (" + activeMatch.getId() + ")");
+            }
         }
 
         String currentMatchId = user.getCurrentMatchId();
@@ -194,8 +200,15 @@ public class MatchServiceImpl implements MatchService {
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         // 2. Check if user is already in an active match
-        if (getActiveMatchForUser(userId) != null) {
-            throw new IllegalArgumentException("User is already in an active match");
+        Match activeMatch = getActiveMatchForUser(userId);
+        if (activeMatch != null) {
+            // Self-healing for private room creation too
+            if (!"playing".equalsIgnoreCase(activeMatch.getStatus())) {
+                log.info("User {} is in a non-playing match {}, auto-leaving to allow room creation", userId, activeMatch.getId());
+                leaveMatch(activeMatch.getId(), userId);
+            } else {
+                throw new IllegalArgumentException("User is already in an active match (" + activeMatch.getId() + ")");
+            }
         }
 
         // 3. Generate unique 4-digit PIN code

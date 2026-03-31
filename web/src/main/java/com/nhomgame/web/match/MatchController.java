@@ -188,6 +188,29 @@ public class MatchController {
         }
     }
 
+    @GetMapping("/api/match/active")
+    public ResponseEntity<ApiResponse<ActiveMatchResponse>> getActiveMatch(Principal principal) {
+        if (principal == null || principal.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse<>(401, false, "Unauthorized", null));
+        }
+
+        String email = principal.getName();
+        User user = authService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "User not found", null));
+        }
+
+        Match activeMatch = resolveActiveMatchByUserRecord(user.getId());
+        if (activeMatch == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(404, false, "No active match found", null));
+        }
+
+        return ResponseEntity.ok(new ApiResponse<>(200, true, "Active match found", new ActiveMatchResponse(activeMatch)));
+    }
+
     private synchronized void pairWaitingUsersIfPossible() {
         List<WaitingQueue> waitingUsers = waitingQueueRepository.findAll().stream()
                 .filter(q -> q != null && q.getStatus() != null && "waiting".equalsIgnoreCase(q.getStatus()))
@@ -473,7 +496,7 @@ public class MatchController {
      * Join a private room by pin code
      * Request body: { "pinCode": "4198" }
      */
-    @PostMapping("/api/matches/join-by-pin")
+    @PostMapping("/api/matches/join")
     public ResponseEntity<ApiResponse<CreateMatchResponse>> joinMatchByPin(
             @RequestBody JoinMatchByPinRequest request,
             Principal principal) {
@@ -710,7 +733,8 @@ public class MatchController {
                     boardState,
                     match.getCurrentTurn(),
                     match.getTurnStartTime(),
-                    match.getTurnTimeLimit());
+                    match.getTurnTimeLimit(),
+                    match.getHostId());
 
             return ResponseEntity.ok(new ApiResponse<>(200, true, "Match state fetched", response));
 
@@ -1240,13 +1264,14 @@ public class MatchController {
         private int currentTurn;
         private java.time.Instant turnStartTime;
         private int turnTimeLimit;
+        private String hostId;
 
         public MatchStateResponse() {
         }
 
         public MatchStateResponse(String matchId, String pinCode, String status, java.util.Map<String, Match.GameBoard> gameBoard,
                                   List<PlayerState> players, BoardState boardState, int currentTurn,
-                                  java.time.Instant turnStartTime, int turnTimeLimit) {
+                                  java.time.Instant turnStartTime, int turnTimeLimit, String hostId) {
             this.matchId = matchId;
             this.pinCode = pinCode;
             this.status = status;
@@ -1256,6 +1281,15 @@ public class MatchController {
             this.currentTurn = currentTurn;
             this.turnStartTime = turnStartTime;
             this.turnTimeLimit = turnTimeLimit;
+            this.hostId = hostId;
+        }
+
+        public String getHostId() {
+            return hostId;
+        }
+
+        public void setHostId(String hostId) {
+            this.hostId = hostId;
         }
 
         public List<PlayerState> getPlayers() {

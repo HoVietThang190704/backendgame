@@ -59,13 +59,16 @@ public class MatchWebSocketController {
         }
 
         matchService.addPlayer(matchId, userId);
-        template.convertAndSend("/topic/match." + matchId,
+        template.convertAndSend("/topic/match/" + matchId,
                 new WsEvent<>("player_joined", userId));
 
         var readyStates = match.getPlayers().stream()
-                .map(p -> new Object[] {p.getUserId(), p.isReady()})
+                .map(p -> new Object() {
+                    public final String userId = p.getUserId();
+                    public final boolean ready = p.isReady();
+                })
                 .collect(Collectors.toList());
-        template.convertAndSend("/topic/match." + matchId,
+        template.convertAndSend("/topic/match/" + matchId,
                 new WsEvent<>("ready_update", readyStates));
 
         if (match.getPlayers().size() >= 2 && match.getPlayers().stream().allMatch(p -> p.isReady())) {
@@ -76,28 +79,45 @@ public class MatchWebSocketController {
     private void startGame(String matchId) {
         Match match = matchService.startMatch(matchId);
         if (match == null) return;
-        template.convertAndSend("/topic/match." + matchId,
+        template.convertAndSend("/topic/match/" + matchId,
                 new WsEvent<>("start_game", new Object() {
-                    public final String matchId2 = matchId;
+                    public final String id = matchId;
                     public final String currentTurn = match.getCurrentPlayerId();
                     public final int turnTimeLimit = match.getTurnTimeLimit();
                 }));
     }
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchWebSocketController.class);
+
     @MessageMapping("/toggle_ready")
     public void toggleReady(@Payload ToggleReadyPayload payload, Principal principal) {
-        String userId = resolveUserId(principal);
+        String userId = resolveUserId(principal, payload.getUserId());
+        log.info("Received toggle_ready from userId: {}, matchId: {}, ready: {}", userId, payload.getMatchId(), payload.isReady());
+        
         if (userId == null) {
+            log.warn("Unauthorized toggle_ready request");
             return;
         }
         String matchId = payload.getMatchId();
         if (matchId == null || matchId.isBlank()) return;
 
         var match = matchService.setPlayerReady(matchId, userId, payload.isReady());
-        template.convertAndSend("/topic/match." + matchId,
-                new WsEvent<>("toggle_ready", userId));
+        log.info("Player {} ready status updated to {} in match {}", userId, payload.isReady(), matchId);
+        
+        // Broadcast the updated state of ALL players to keep everyone in sync
+        var readyStates = match.getPlayers().stream()
+                .map(p -> new Object() {
+                    public final String userId = p.getUserId();
+                    public final boolean ready = p.isReady();
+                })
+                .collect(Collectors.toList());
+        
+        template.convertAndSend("/topic/match/" + matchId,
+                new WsEvent<>("ready_update", readyStates));
+        log.info("Broadcasted ready_update to /topic/match/{}", matchId);
 
         if (match.getPlayers().size() >= 2 && match.getPlayers().stream().allMatch(p -> p.isReady())) {
+            log.info("All players ready, starting match {}", matchId);
             startGame(matchId);
         }
     }
@@ -115,7 +135,7 @@ public class MatchWebSocketController {
 
         Match updated = matchService.getMatchById(payload.getMatchId());
         if (updated != null && "PLAYING".equalsIgnoreCase(updated.getStatus())) {
-            template.convertAndSend("/topic/match." + payload.getMatchId(),
+            template.convertAndSend("/topic/match/" + payload.getMatchId(),
                     new WsEvent<>("start_game", new Object() {
                         public final String matchId = payload.getMatchId();
                         public final String currentTurn = updated.getCurrentPlayerId();
@@ -138,11 +158,11 @@ public class MatchWebSocketController {
         if (!userId.equals(match.getCurrentPlayerId())) return;
 
         var result = matchService.applyMove(matchId, userId, payload.getX(), payload.getY(), payload.getAction());
-        template.convertAndSend("/topic/match." + matchId,
+        template.convertAndSend("/topic/match/" + matchId,
                 new WsEvent<>("move_result", result));
 
         if (result.isGameOver()) {
-            template.convertAndSend("/topic/match." + matchId,
+            template.convertAndSend("/topic/match/" + matchId,
                     new WsEvent<>("game_over", result));
             return;
         }
@@ -150,7 +170,7 @@ public class MatchWebSocketController {
 
         Match switched = matchService.getMatchById(matchId);
         if (switched != null) {
-            template.convertAndSend("/topic/match." + matchId,
+            template.convertAndSend("/topic/match/" + matchId,
                     new WsEvent<>("turn_switched", new Object() {
                         public final String currentTurn = switched.getCurrentPlayerId();
                         public final Integer turnTimeLimit = switched.getTurnTimeLimit();

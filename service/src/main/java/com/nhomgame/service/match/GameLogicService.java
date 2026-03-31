@@ -34,9 +34,9 @@ public class GameLogicService {
 
     @Transactional
     @SuppressWarnings("rawtypes")
-    public void placeBombs(String matchId, String userId, List bombs) {
-        Match match = matchRepository.findById(matchId)
-                .orElseThrow(() -> new IllegalArgumentException("Match not found: " + matchId));
+    public void placeBombs(String mid, String userId, List bombs) {
+        Match match = matchRepository.findById(mid)
+                .orElseThrow(() -> new IllegalArgumentException("Match not found: " + mid));
 
         if (!"PREPARATION".equalsIgnoreCase(match.getStatus())) {
             throw new IllegalStateException("Match is not in PREPARATION status");
@@ -62,8 +62,12 @@ public class GameLogicService {
 
         if (bothPlacedBombs) {
             messagingTemplate.convertAndSend(
-                    "/topic/match/" + matchId,
-                    new WsEvent<>("GAME_START", savedMatch));
+                    "/topic/match/" + mid,
+                    new WsEvent<>("start_game", new Object() {
+                        public final String matchId = mid;
+                        public final String currentTurn = savedMatch.getCurrentPlayerId();
+                        public final int turnTimeLimit = savedMatch.getTurnTimeLimit();
+                    }));
         }
     }
 

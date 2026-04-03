@@ -154,18 +154,19 @@ public class MatchController {
             // If user has been paired immediately, return matchId to let FE redirect instantly
             Match activeMatch = resolveActiveMatchByUserRecord(userId);
 
-            if (activeMatch != null && activeMatch.getId() != null && activeMatch.getPlayers() != null) {
-                log.info("Match found for user {}. Broadcasting to {} players", userId, activeMatch.getPlayers().size());
-                for (Match.Player p : activeMatch.getPlayers()) {
-                    if (p == null || p.getUserId() == null || p.getUserId().isBlank()) {
-                        log.warn("Skipping null or blank userId player");
-                        continue;
+            if (activeMatch != null && activeMatch.getId() != null) {
+                log.info("Match found for user {}. Broadcasting to {} players. Match ID: {}", 
+                    userId, (activeMatch.getPlayers() != null ? activeMatch.getPlayers().size() : 0), activeMatch.getId());
+                if (activeMatch.getPlayers() != null) {
+                    for (Match.Player p : activeMatch.getPlayers()) {
+                        if (p == null || p.getUserId() == null || p.getUserId().isBlank()) {
+                            continue;
+                        }
+                        log.info("Sending match_found event to user {} on topic /topic/user.{}.matchmaking", p.getUserId(), p.getUserId());
+                        messagingTemplate.convertAndSend(
+                                "/topic/user." + p.getUserId() + ".matchmaking",
+                                new WsEvent<>("match_found", new MatchFoundPayload(activeMatch.getId(), activeMatch.getStatus())));
                     }
-                    log.info("Sending WebSocket event to user {} on topic /topic/user.{}.matchmaking", p.getUserId(), p.getUserId());
-                    messagingTemplate.convertAndSend(
-                            "/topic/user." + p.getUserId() + ".matchmaking",
-                            new WsEvent<>("match_found", new MatchFoundPayload(activeMatch.getId(), activeMatch.getStatus())));
-                    log.info("WebSocket event sent successfully to user {}", p.getUserId());
                 }
             } else {
                 log.info("No active match found for user {} yet", userId);
@@ -173,6 +174,7 @@ public class MatchController {
 
             // Map to response DTO
             WaitingQueueResponse response = new WaitingQueueResponse(queueEntry, activeMatch);
+            log.info("Returning findMatch response with matchId: {}", response.getMatchId());
 
             return ResponseEntity.status(HttpStatus.CREATED)
                     .body(new ApiResponse<>(201, true, "Added to waiting queue", response));
@@ -638,11 +640,13 @@ public class MatchController {
      *
      * Retrieve match state (board, players, current turn, timer)
      */
-    @org.springframework.web.bind.annotation.GetMapping("/api/matches/{id}")
+    @GetMapping("/api/matches/{id}")
     public ResponseEntity<ApiResponse<MatchStateResponse>> getMatchState(
-            @org.springframework.web.bind.annotation.PathVariable("id") String matchId,
+            @PathVariable("id") String matchId,
             Principal principal) {
-
+        
+        log.info("Fetching match state for ID: {}", matchId);
+        
         if (principal == null || principal.getName() == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(new ApiResponse<>(401, false, "Unauthorized", null));
@@ -655,16 +659,20 @@ public class MatchController {
                     .body(new ApiResponse<>(404, false, "User not found", null));
         }
 
-        Match match = matchService.getMatchById(matchId);
+        // Direct database lookup to ensure the current match state
+        Match match = matchRepository.findById(matchId).orElse(null);
         if (match == null) {
+            log.warn("Match not found in database: {}", matchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(new ApiResponse<>(404, false, "Match not found", null));
+                    .body(new ApiResponse<>(404, false, "Match not found in database", null));
         }
 
-        // Authorization: only match members can query match state
+        // Security check: ensure user is in the match
         boolean isMember = match.getPlayers().stream()
                 .anyMatch(p -> p.getUserId().equals(currentUser.getId()));
-        if (!isMember && !match.getHostId().equals(currentUser.getId())) {
+        
+        if (!isMember && (match.getHostId() != null && !match.getHostId().equals(currentUser.getId()))) {
+            log.warn("User {} is not a member of match {}", currentUser.getId(), matchId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(new ApiResponse<>(403, false, "Forbidden: user not in this match", null));
         }
@@ -672,22 +680,24 @@ public class MatchController {
         try {
             List<PlayerState> players = new ArrayList<>();
             int idx = 0;
-            for (Match.Player player : match.getPlayers()) {
-                idx++;
-                User u = authService.findById(player.getUserId());
-                String displayName = (u != null && u.getName() != null && !u.getName().isBlank()) ? u.getName() : player.getUsername();
-                String avatar = (u != null && u.getAvatarUrl() != null) ? u.getAvatarUrl() : "";
-                int rank = (u != null) ? u.getRank() : 0;
+            if (match.getPlayers() != null) {
+                for (Match.Player player : match.getPlayers()) {
+                    idx++;
+                    User u = authService.findById(player.getUserId());
+                    String displayName = (u != null && u.getName() != null && !u.getName().isBlank()) ? u.getName() : player.getUsername();
+                    String avatar = (u != null && u.getAvatarUrl() != null) ? u.getAvatarUrl() : "";
+                    int rank = (u != null) ? u.getRank() : 0;
 
-                PlayerState playerState = new PlayerState();
-                playerState.setUserId(player.getUserId());
-                playerState.setDisplayName(displayName);
-                playerState.setAvatar(avatar);
-                playerState.setRank(rank);
-                playerState.setHealth(player.getHealth());
-                playerState.setIsReady(player.isReady());
-                playerState.setPlayerNumber(idx);
-                players.add(playerState);
+                    PlayerState playerState = new PlayerState();
+                    playerState.setUserId(player.getUserId());
+                    playerState.setDisplayName(displayName);
+                    playerState.setAvatar(avatar);
+                    playerState.setRank(rank);
+                    playerState.setHealth(player.getHealth());
+                    playerState.setIsReady(player.isReady());
+                    playerState.setPlayerNumber(idx);
+                    players.add(playerState);
+                }
             }
 
             String player1Id = match.getPlayers().size() > 0 ? match.getPlayers().get(0).getUserId() : null;

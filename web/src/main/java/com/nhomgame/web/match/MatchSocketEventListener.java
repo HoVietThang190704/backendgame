@@ -38,6 +38,6 @@ public class MatchSocketEventListener {
         }
 
         matchService.markPlayerDisconnected(matchId, userId);
-        template.convertAndSend("/topic/match/" + matchId, new WsEvent<>("player_left", userId));
+        template.convertAndSend("/topic/match." + matchId, new WsEvent<>("player_left", userId));
     }
 }

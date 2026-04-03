@@ -6,9 +6,17 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+import com.nhomgame.service.auth.JwtService;
+
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    private final JwtService jwtService;
+
+    public WebSocketConfig(JwtService jwtService) {
+        this.jwtService = jwtService;
+    }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
@@ -20,6 +28,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws-game")
                 .setAllowedOriginPatterns("*")
+                .addInterceptors(new WebSocketAuthInterceptor(jwtService))
                 .withSockJS();
     }
 }
